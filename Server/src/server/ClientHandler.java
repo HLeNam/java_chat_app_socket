@@ -604,6 +604,8 @@ public class ClientHandler implements Runnable {
     private void handleFileAccept(String message) {
         String fileId = message.substring(Protocol.CMD_FILE_ACCEPT.length()).trim();
 
+        System.out.println("Client accepts file: fileId=" + fileId + ", username=" + username);
+
         FileService.acceptFileTransfer(fileId, username);
     }
 

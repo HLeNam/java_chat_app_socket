@@ -64,7 +64,7 @@ public class FileTransferPanel extends JPanel {
                 JProgressBar progressBar = addUploadProgressBar(file.getName(), receiver);
 
                 // Gửi yêu cầu chuyển file đến server
-                client.sendFileRequest(receiver, file.getName(), file.length());
+                client.sendFileRequest(receiver, file);
 
                 // Lưu file để upload khi nhận được chấp nhận từ server
                 client.addFileToUpload(fileId, file);

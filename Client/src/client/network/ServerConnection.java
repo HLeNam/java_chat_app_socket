@@ -103,7 +103,8 @@ public class ServerConnection implements Runnable {
                 limit);
     }
 
-    public void sendFileRequest(String receiver, String fileName, long fileSize) {
+    public void sendFileRequest(String receiver, String fileName, long fileSize, String fileId) {
+        // Nếu có tham số fileId, sử dụng nó để đảm bảo ID nhất quán
         sendMessage(Protocol.CMD_FILE_SEND + receiver + Protocol.PARAM_DELIMITER +
                 fileName + Protocol.PARAM_DELIMITER + fileSize);
     }

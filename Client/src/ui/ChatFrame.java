@@ -1341,4 +1341,33 @@ public class ChatFrame extends JFrame {
         chatPanels.put("Global", chatArea);
         chatTabs.addTab("Global", scrollPane);
     }
+
+    public void showNotification(String message) {
+        // Hiển thị thông báo ở góc phải dưới màn hình
+        JWindow notification = new JWindow();
+        JPanel panel = new JPanel();
+        panel.setBorder(BorderFactory.createLineBorder(Color.GRAY));
+        panel.setBackground(new Color(255, 255, 225));
+
+        JLabel label = new JLabel(message);
+        label.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        panel.add(label);
+
+        notification.add(panel);
+        notification.pack();
+
+        // Đặt vị trí ở góc phải dưới màn hình
+        Dimension screenSize = Toolkit.getDefaultToolkit().getScreenSize();
+        notification.setLocation(
+                screenSize.width - notification.getWidth() - 20,
+                screenSize.height - notification.getHeight() - 50
+        );
+
+        notification.setVisible(true);
+
+        // Tự động đóng sau 3 giây
+        Timer timer = new Timer(3000, e -> notification.dispose());
+        timer.setRepeats(false);
+        timer.start();
+    }
 }

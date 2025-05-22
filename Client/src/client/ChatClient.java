@@ -41,6 +41,8 @@ public class ChatClient {
     private LocalStorage localStorage;
     private FileTransferClient fileTransferClient;
 
+    private String defaultDownloadFolder;
+
     public ChatClient() {
         this("localhost", 9999, 9998);
     }
@@ -49,6 +51,13 @@ public class ChatClient {
         this.serverHost = host;
         this.serverPort = port;
         this.filePort = filePort;
+
+        // Tạo thư mục Downloads trong thư mục của người dùng
+        this.defaultDownloadFolder = System.getProperty("user.home") + File.separator + "ChatAppDownloads";
+        File downloadDir = new File(defaultDownloadFolder);
+        if (!downloadDir.exists()) {
+            downloadDir.mkdirs();
+        }
     }
 
     public boolean connect() {
@@ -219,8 +228,25 @@ public class ChatClient {
     }
 
     // Gửi yêu cầu chuyển file
-    public void sendFileRequest(String receiver, String fileName, long fileSize) {
-        serverConnection.sendFileRequest(receiver, fileName, fileSize);
+    public void sendFileRequest(String receiver, File file) {
+        if (file == null || !file.exists()) {
+            System.out.println("ERROR: File không tồn tại");
+            return;
+        }
+
+        String fileName = file.getName();
+        long fileSize = file.length();
+
+        // Generate unique fileId (hoặc bạn có thể sử dụng UUID.randomUUID().toString())
+        String fileId = System.currentTimeMillis() + "_" + fileName.hashCode();
+
+        // QUAN TRỌNG: Lưu file vào map TRƯỚC khi gửi request
+        addFileToUpload(fileId, file);
+
+        // Gửi yêu cầu chuyển file
+        serverConnection.sendFileRequest(receiver, fileName, fileSize, fileId);
+
+        System.out.println("Sent file request: fileId=" + fileId + ", to=" + receiver + ", filename=" + fileName);
     }
 
     // Chấp nhận file
@@ -236,6 +262,7 @@ public class ChatClient {
     // Thêm file vào danh sách chờ upload
     public void addFileToUpload(String fileId, File file) {
         filesToUpload.put(fileId, file);
+        System.out.println("Added file to upload: fileId=" + fileId + ", filename=" + file.getName() + ", size=" + file.length());
     }
 
     // Lấy file cần upload theo ID
@@ -713,17 +740,48 @@ public class ChatClient {
             String fileName = parts[2];
             long fileSize = Long.parseLong(parts[3]);
 
+            System.out.println("Received file request: fileId=" + fileId + ", sender=" + sender + ", filename=" + fileName);
+
             // Nếu là người nhận file
             if (!sender.equals(currentUser.getUsername())) {
+                // Tự động chấp nhận file
+                serverConnection.sendMessage(Protocol.CMD_FILE_ACCEPT + fileId);
+
+                // Tạo đường dẫn file để lưu
+                String saveFilePath = defaultDownloadFolder + File.separator + fileName;
+
+                // Kiểm tra nếu file đã tồn tại, thêm số vào tên file
+                File saveFile = new File(saveFilePath);
+                int count = 1;
+                String baseFileName = fileName;
+                String extension = "";
+
+                // Tách tên file và phần mở rộng
+                int lastDotPos = fileName.lastIndexOf(".");
+                if (lastDotPos > 0) {
+                    baseFileName = fileName.substring(0, lastDotPos);
+                    extension = fileName.substring(lastDotPos);
+                }
+
+                // Nếu file đã tồn tại, tạo tên mới
+                while (saveFile.exists()) {
+                    saveFilePath = defaultDownloadFolder + File.separator + baseFileName + "(" + count + ")" + extension;
+                    saveFile = new File(saveFilePath);
+                    count++;
+                }
+
+                // Thêm file vào danh sách chờ download
+                addFileToDownload(fileId, sender, fileName, fileSize, saveFilePath);
+
+                // Hiển thị thông báo nhận file
                 if (chatFrame != null) {
-                    chatFrame.handleFileRequest(fileId, sender, fileName, fileSize);
+                    chatFrame.displayFileMessage(sender, sender, fileName, fileSize, fileId, "Đang chờ nhận file...");
                 }
             } else {
                 // Nếu là người gửi file (nhận lại thông báo xác nhận đã gửi yêu cầu)
-                String receiver = parts[1];
+                // KHÔNG XÓA file khỏi map ở đây
                 if (chatFrame != null) {
-                    chatFrame.displayFileMessage(receiver, sender, fileName, fileSize,
-                            fileId, "Đang chờ xác nhận...");
+                    chatFrame.displayFileMessage(sender, sender, fileName, fileSize, fileId, "Đang chờ gửi...");
                 }
             }
         }
@@ -736,19 +794,27 @@ public class ChatClient {
         String[] parts = content.split("\\|");
 
         String fileId = parts[0];
+        System.out.println("File accepted: fileId=" + fileId + ", parts.length=" + parts.length);
+
+        // Liệt kê tất cả các file đang chờ upload để debug
+        System.out.println("Files waiting to upload:");
+        for (Map.Entry<String, File> entry : filesToUpload.entrySet()) {
+            System.out.println("  - " + entry.getKey() + ": " + entry.getValue().getName());
+        }
 
         if (parts.length == 1) {
             // Người gửi nhận được thông báo người nhận đã chấp nhận
-            if (chatFrame != null) {
-                File fileToSend = getFileToUpload(fileId);
-                if (fileToSend != null) {
-                    // Thực hiện upload
-                    uploadFile(fileId, fileToSend, "receiver", progress -> {
-                        if (chatFrame != null) {
-                            chatFrame.updateFileUploadProgress(fileId, progress);
-                        }
-                    });
-                }
+            File fileToSend = getFileToUpload(fileId);
+            if (fileToSend != null) {
+                System.out.println("Starting upload file: " + fileToSend.getName());
+                // Thực hiện upload
+                uploadFile(fileId, fileToSend, "receiver", progress -> {
+                    if (chatFrame != null) {
+                        chatFrame.updateFileUploadProgress(fileId, progress);
+                    }
+                });
+            } else {
+                System.out.println("ERROR: File to upload not found for fileId: " + fileId);
             }
         } else if (parts.length == 4) {
             // Người nhận nhận được thông báo file đã sẵn sàng để tải
@@ -756,11 +822,30 @@ public class ChatClient {
             String fileName = parts[2];
             long fileSize = Long.parseLong(parts[3]);
 
-            SwingUtilities.invokeLater(() -> {
-                if (chatFrame != null) {
-                    chatFrame.handleFileReady(fileId, sender, fileName, fileSize);
-                }
-            });
+            System.out.println("File ready to download from " + sender + ": " + fileName);
+
+            // Lấy đường dẫn đã lưu trước đó
+            String[] fileInfo = getFileToDownload(fileId);
+            if (fileInfo != null) {
+                String savePath = fileInfo[3];
+
+                // Tự động bắt đầu download
+                downloadFile(fileId, sender, fileName, fileSize, savePath, progress -> {
+                    SwingUtilities.invokeLater(() -> {
+                        if (chatFrame != null) {
+                            if (progress < 100) {
+                                chatFrame.updateFileStatus(fileId, "Đang tải: " + progress + "%");
+                            } else {
+                                chatFrame.updateFileStatus(fileId, "Đã tải xong");
+                                // Thông báo cho người dùng
+                                chatFrame.showNotification("Đã tải xong file " + fileName + " từ " + sender);
+                            }
+                        }
+                    });
+                });
+            } else {
+                System.out.println("ERROR: Download info not found for fileId: " + fileId);
+            }
         }
     }
 

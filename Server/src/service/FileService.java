@@ -189,14 +189,30 @@ public class FileService {
         return fileId;
     }
 
-    public static void acceptFileTransfer(String fileId, String receiver) {
+    public static void acceptFileTransfer(String fileId, String username) {
+        // Thêm log để debug
+        System.out.println("File Accept: fileId=" + fileId + ", username=" + username);
+
         FileTransferInfo transferInfo = activeTransfers.get(fileId);
-        if (transferInfo != null && transferInfo.receiver.equals(receiver)) {
+        if (transferInfo == null) {
+            System.out.println("File transfer info not found for fileId: " + fileId);
+            return;
+        }
+
+        System.out.println("TransferInfo: sender=" + transferInfo.sender +
+                ", receiver=" + transferInfo.receiver);
+
+        // Kiểm tra nếu người gọi là người nhận file HOẶC là người gửi file
+        if (transferInfo.receiver.equals(username) || transferInfo.sender.equals(username)) {
             // Thông báo cho người gửi rằng file đã được chấp nhận
             ClientHandler senderHandler = ChatServer.getClientHandler(transferInfo.sender);
             if (senderHandler != null) {
                 senderHandler.sendMessage(Protocol.SVR_FILE_ACCEPT + fileId);
+            } else {
+                System.out.println("Sender handler not found for: " + transferInfo.sender);
             }
+        } else {
+            System.out.println("Username " + username + " doesn't match receiver or sender");
         }
     }
 

@@ -21,151 +21,126 @@ public class FileTransferClient {
         this.client = client;
     }
 
-    public void uploadFile(String fileId, File file, String receiver,
-                           Consumer<Integer> progressCallback) {
-        new Thread(() -> {
-            try (Socket socket = new Socket(serverIP, filePort);
-                 DataInputStream dis = new DataInputStream(socket.getInputStream());
-                 DataOutputStream dos = new DataOutputStream(socket.getOutputStream())) {
+    public void uploadFile(String fileId, File file, String receiver, Consumer<Integer> progressCallback) {
+        if (file == null || !file.exists()) {
+            System.out.println("Error: File is null or doesn't exist: " + (file != null ? file.getAbsolutePath() : "null"));
+            return;
+        }
 
-                // Gửi thông tin phiên chuyển file
+        System.out.println("Starting upload: fileId=" + fileId + ", file=" + file.getName() + ", size=" + file.length());
+
+        // Tạo thread mới để upload file
+        new Thread(() -> {
+            try {
+                Socket socket = new Socket(serverIP, filePort);
+                DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
+                DataInputStream dis = new DataInputStream(socket.getInputStream());
+
+                // Gửi yêu cầu upload
                 dos.writeUTF("SEND");
                 dos.writeUTF(fileId);
+                dos.flush();
 
-                // Kiểm tra phản hồi từ server
+                // Đọc phản hồi từ server
                 boolean canProceed = dis.readBoolean();
                 if (!canProceed) {
-                    SwingUtilities.invokeLater(() ->
-                            JOptionPane.showMessageDialog(null,
-                                    "Không thể gửi file: Server từ chối kết nối",
-                                    "Lỗi", JOptionPane.ERROR_MESSAGE));
+                    progressCallback.accept(-1); // Lỗi
+                    System.out.println("Server refused file upload: fileId=" + fileId);
                     return;
                 }
 
-                // Gửi file
+                // Đọc file và gửi dữ liệu
                 try (FileInputStream fis = new FileInputStream(file)) {
                     byte[] buffer = new byte[8192];
                     int bytesRead;
                     long totalBytesSent = 0;
+                    long fileSize = file.length();
 
                     while ((bytesRead = fis.read(buffer)) != -1) {
                         dos.write(buffer, 0, bytesRead);
-                        dos.flush();
-
                         totalBytesSent += bytesRead;
 
-                        // Nhận progress update từ server
-                        int progressPercent = dis.readInt();
+                        // Cập nhật tiến trình
+                        int progressPercent = (int)((totalBytesSent * 100) / fileSize);
+                        progressCallback.accept(progressPercent);
 
-                        // Cập nhật progress bar
-                        if (progressCallback != null) {
-                            SwingUtilities.invokeLater(() ->
-                                    progressCallback.accept(progressPercent));
-                        }
-
-                        // Khi hoàn thành upload
-                        if (progressPercent >= 100) {
-                            // Thông báo cho ChatFrame cập nhật trạng thái trong chat
-                            client.updateFileStatusInChat(fileId, receiver, "Đã gửi thành công");
-                        }
+                        // Đọc tiến trình từ server
+                        dis.readInt(); // Bỏ qua giá trị tiến trình từ server
                     }
+
+                    dos.flush();
+
+                    // Kết thúc upload
+                    progressCallback.accept(100);
+
+                    System.out.println("File upload completed: fileId=" + fileId);
                 }
 
-                // Lưu thông tin file vào local storage
-                FileInfo fileInfo = new FileInfo();
-                fileInfo.setId(fileId);
-                fileInfo.setSender(client.getCurrentUser().getUsername());
-                fileInfo.setReceiver(receiver);
-                fileInfo.setFileName(file.getName());
-                fileInfo.setFileSize(file.length());
-                fileInfo.setStoragePath(file.getAbsolutePath());
+                socket.close();
 
-                client.getLocalStorage().saveFileSent(fileInfo);
-            }  catch (IOException e) {
+            } catch (Exception e) {
                 e.printStackTrace();
-                SwingUtilities.invokeLater(() ->
-                        JOptionPane.showMessageDialog(null,
-                                "Lỗi khi gửi file: " + e.getMessage(),
-                                "Lỗi", JOptionPane.ERROR_MESSAGE));
+                progressCallback.accept(-1); // Lỗi
+                System.out.println("Error uploading file: " + e.getMessage());
             }
         }).start();
     }
 
     public void downloadFile(String fileId, String sender, String fileName, long fileSize,
                              String savePath, Consumer<Integer> progressCallback) {
+        // Tạo thread mới để download file
         new Thread(() -> {
-            try (Socket socket = new Socket(serverIP, filePort);
-                 DataInputStream dis = new DataInputStream(socket.getInputStream());
-                 DataOutputStream dos = new DataOutputStream(socket.getOutputStream())) {
-                // Gửi thông tin phiên chuyển file
-                dos.writeUTF("RECEIVE");
-                dos.writeUTF(fileId);
+            try {
+                Socket socket = new Socket(serverIP, filePort);
 
-                boolean fileExists = dis.readBoolean();
-                if (!fileExists) {
-                    SwingUtilities.invokeLater(() ->
-                            JOptionPane.showMessageDialog(null,
-                                    "Không thể tải file: File không tồn tại trên server",
-                                    "Lỗi", JOptionPane.ERROR_MESSAGE));
-                    return;
-                }
+                // Gửi yêu cầu tải file
+                DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
+                dos.writeUTF("DOWNLOAD:" + fileId + ":" + sender);
 
-                long actualFileSize = dis.readLong();
+                // Đọc dữ liệu file
+                DataInputStream dis = new DataInputStream(socket.getInputStream());
 
-                Files.createDirectories(Paths.get(savePath).getParent());
+                // Trạng thái response
+                String response = dis.readUTF();
+                if (response.startsWith("OK")) {
+                    // Tạo file output stream với đường dẫn đã chỉ định
+                    FileOutputStream fos = new FileOutputStream(savePath);
 
-                try (FileOutputStream fos = new FileOutputStream(savePath)) {
+                    // Đọc dữ liệu từ socket và ghi vào file
                     byte[] buffer = new byte[8192];
                     int bytesRead;
                     long totalBytesRead = 0;
+                    int lastProgress = 0;
 
-                    while (totalBytesRead < actualFileSize &&
-                            (bytesRead = dis.read(buffer, 0, (int) Math.min(buffer.length,
-                                    actualFileSize - totalBytesRead))) != -1) {
+                    while (totalBytesRead < fileSize && (bytesRead = dis.read(buffer, 0, buffer.length)) != -1) {
                         fos.write(buffer, 0, bytesRead);
                         totalBytesRead += bytesRead;
 
-                        // Đọc progress update từ server
-                        int progressPercent = dis.readInt();
-
-                        // Cập nhật progress bar
-                        if (progressCallback != null) {
-                            final int percent = progressPercent;
-                            SwingUtilities.invokeLater(() -> {
-                                progressCallback.accept(percent);
-
-                                // Khi hoàn thành download
-                                if (percent >= 100) {
-                                    // Thông báo cho ChatFrame cập nhật trạng thái trong chat
-                                    client.updateFileStatusInChat(fileId, sender,
-                                            "Đã tải về thành công - [" + savePath + "]");
-                                }
-                            });
+                        // Cập nhật tiến trình
+                        int progress = (int) ((totalBytesRead * 100) / fileSize);
+                        if (progress > lastProgress) {
+                            progressCallback.accept(progress);
+                            lastProgress = progress;
                         }
                     }
+
+                    fos.close();
+
+                    // Đã tải xong
+                    progressCallback.accept(100);
+
+                    // Thông báo cho client rằng đã tải xong
+                    client.updateFileStatusInChat(fileId, sender, "Đã tải xong");
+                } else {
+                    // Lỗi
+                    client.updateFileStatusInChat(fileId, sender, "Lỗi: " + response);
                 }
 
-                // Lưu thông tin file vào local storage
-                FileInfo fileInfo = new FileInfo();
-                fileInfo.setId(fileId);
-                fileInfo.setSender(sender);
-                fileInfo.setReceiver(client.getCurrentUser().getUsername());
-                fileInfo.setFileName(fileName);
-                fileInfo.setFileSize(fileSize);
-                fileInfo.setStoragePath(savePath);
+                socket.close();
 
-                client.getLocalStorage().saveFileReceived(fileInfo);
-
-                SwingUtilities.invokeLater(() ->
-                        JOptionPane.showMessageDialog(null,
-                                "Tải file thành công!\nLưu tại: " + savePath,
-                                "Thành công", JOptionPane.INFORMATION_MESSAGE));
-            } catch (IOException e) {
+            } catch (Exception e) {
                 e.printStackTrace();
-                SwingUtilities.invokeLater(() ->
-                        JOptionPane.showMessageDialog(null,
-                                "Lỗi khi tải file: " + e.getMessage(),
-                                "Lỗi", JOptionPane.ERROR_MESSAGE));
+                client.updateFileStatusInChat(fileId, sender, "Lỗi: " + e.getMessage());
             }
         }).start();
     }
