@@ -369,6 +369,8 @@ public class ChatClient {
             handleFileAccepted(message);
         } else if (message.startsWith(Protocol.SVR_FILE_REJECT)) {
             handleFileRejected(message);
+        } else if (message.startsWith(Protocol.SVR_FILE_DOWNLOAD)) {
+            handleFileDownload(message);
         }
     }
 
@@ -858,6 +860,17 @@ public class ChatClient {
 
         if (chatFrame != null) {
             chatFrame.updateFileStatus(fileId, "Đã bị từ chối");
+        }
+    }
+
+    private void handleFileDownload(String message) {
+        String fileId = message.substring(Protocol.SVR_FILE_DOWNLOAD.length());
+
+        System.out.println("File downloaded: fileId=" + fileId);
+        // Xóa file khỏi danh sách
+        filesToDownload.remove(fileId);
+        if (chatFrame != null) {
+            chatFrame.updateFileStatus(fileId, "Đã tải xong");
         }
     }
 

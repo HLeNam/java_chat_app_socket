@@ -88,23 +88,38 @@ public class FileTransferClient {
 
     public void downloadFile(String fileId, String sender, String fileName, long fileSize,
                              String savePath, Consumer<Integer> progressCallback) {
+        System.out.println("Starting download: fileId=" + fileId + ", fileName=" + fileName + ", savePath=" + savePath);
+
         // Tạo thread mới để download file
         new Thread(() -> {
+            Socket socket = null;
+            FileOutputStream fos = null;
+            DataInputStream dis = null;
+            DataOutputStream dos = null;
+
             try {
-                Socket socket = new Socket(serverIP, filePort);
+                socket = new Socket(serverIP, filePort);
+                dos = new DataOutputStream(socket.getOutputStream());
+                dis = new DataInputStream(socket.getInputStream());
 
                 // Gửi yêu cầu tải file
-                DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
-                dos.writeUTF("DOWNLOAD:" + fileId + ":" + sender);
+                dos.writeUTF("RECEIVE");
+                dos.writeUTF(fileId);
+                dos.flush();
 
-                // Đọc dữ liệu file
-                DataInputStream dis = new DataInputStream(socket.getInputStream());
+                System.out.println("Sent download request for fileId: " + fileId);
 
-                // Trạng thái response
-                String response = dis.readUTF();
-                if (response.startsWith("OK")) {
+                // Đọc trạng thái response từ server
+                boolean canDownload = dis.readBoolean();
+                System.out.println("Server response - canDownload: " + canDownload);
+
+                if (canDownload) {
+                    // Đọc kích thước file thực tế từ server
+                    long actualFileSize = dis.readLong();
+                    System.out.println("Actual file size from server: " + actualFileSize);
+
                     // Tạo file output stream với đường dẫn đã chỉ định
-                    FileOutputStream fos = new FileOutputStream(savePath);
+                    fos = new FileOutputStream(savePath);
 
                     // Đọc dữ liệu từ socket và ghi vào file
                     byte[] buffer = new byte[8192];
@@ -112,35 +127,79 @@ public class FileTransferClient {
                     long totalBytesRead = 0;
                     int lastProgress = 0;
 
-                    while (totalBytesRead < fileSize && (bytesRead = dis.read(buffer, 0, buffer.length)) != -1) {
+                    System.out.println("Starting file data transfer...");
+
+                    while (totalBytesRead < actualFileSize) {
+                        bytesRead = dis.read(buffer, 0, (int)Math.min(buffer.length, actualFileSize - totalBytesRead));
+
+                        if (bytesRead == -1) {
+                            System.out.println("Unexpected end of stream. Downloaded: " + totalBytesRead + "/" + actualFileSize);
+                            break;
+                        }
+
                         fos.write(buffer, 0, bytesRead);
                         totalBytesRead += bytesRead;
 
                         // Cập nhật tiến trình
-                        int progress = (int) ((totalBytesRead * 100) / fileSize);
+                        int progress = (int) ((totalBytesRead * 100) / actualFileSize);
                         if (progress > lastProgress) {
                             progressCallback.accept(progress);
                             lastProgress = progress;
+                            System.out.println("Download progress: " + progress + "% (" + totalBytesRead + "/" + actualFileSize + " bytes)");
                         }
                     }
 
-                    fos.close();
+                    // Đảm bảo tiến trình 100% khi hoàn thành
+                    if (totalBytesRead >= actualFileSize) {
+                        progressCallback.accept(100);
+                        System.out.println("File download completed successfully: " + fileName);
 
-                    // Đã tải xong
-                    progressCallback.accept(100);
+                        // Thông báo cho client rằng đã tải xong
+                        if (client != null) {
+                            client.updateFileStatusInChat(fileId, sender, "Đã tải xong");
+                        }
+                    } else {
+                        System.out.println("File download incomplete. Expected: " + actualFileSize + ", Got: " + totalBytesRead);
+                        progressCallback.accept(-1);
+                        if (client != null) {
+                            client.updateFileStatusInChat(fileId, sender, "Lỗi: Tải file không hoàn chỉnh");
+                        }
+                    }
 
-                    // Thông báo cho client rằng đã tải xong
-                    client.updateFileStatusInChat(fileId, sender, "Đã tải xong");
                 } else {
-                    // Lỗi
-                    client.updateFileStatusInChat(fileId, sender, "Lỗi: " + response);
+                    // Server không thể cung cấp file
+                    System.out.println("Server cannot provide file for fileId: " + fileId);
+                    progressCallback.accept(-1);
+                    if (client != null) {
+                        client.updateFileStatusInChat(fileId, sender, "Lỗi: Server không thể cung cấp file");
+                    }
                 }
 
-                socket.close();
-
             } catch (Exception e) {
+                System.err.println("Error downloading file: " + e.getMessage());
                 e.printStackTrace();
-                client.updateFileStatusInChat(fileId, sender, "Lỗi: " + e.getMessage());
+                progressCallback.accept(-1);
+                if (client != null) {
+                    client.updateFileStatusInChat(fileId, sender, "Lỗi: " + e.getMessage());
+                }
+            } finally {
+                // Đóng tất cả resources
+                try {
+                    if (fos != null) {
+                        fos.close();
+                    }
+                    if (dis != null) {
+                        dis.close();
+                    }
+                    if (dos != null) {
+                        dos.close();
+                    }
+                    if (socket != null && !socket.isClosed()) {
+                        socket.close();
+                    }
+                } catch (IOException e) {
+                    System.err.println("Error closing resources: " + e.getMessage());
+                }
             }
         }).start();
     }

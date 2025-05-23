@@ -554,9 +554,9 @@ public class ClientHandler implements Runnable {
 
     private void handleFileSendRequest(String message) {
         String content = message.substring(Protocol.CMD_FILE_SEND.length());
-        String[] parts = content.split("\\|", 3);
+        String[] parts = content.split("\\|", 4);
 
-        if (parts.length != 3) {
+        if (parts.length != 4) {
             out.println(Protocol.SVR_ERROR + "Định dạng yêu cầu file không hợp lệ.");
             return;
         }
@@ -572,13 +572,15 @@ public class ClientHandler implements Runnable {
             return;
         }
 
+        String fileId = parts[3].trim();
+
         if (!UserDAO.usernameExists(receiver)) {
             out.println(Protocol.SVR_ERROR + "Người dùng không tồn tại.");
             return;
         }
 
-        String fileId = FileService.createFileTransferRequest(username, receiver, fileName, fileSize);
-        if (fileId == null) {
+        String _fileId = FileService.createFileTransferRequest(username, receiver, fileName, fileSize, fileId);
+        if (_fileId == null) {
             out.println(Protocol.SVR_ERROR + "Không thể tạo yêu cầu chuyển file.");
             return;
         }

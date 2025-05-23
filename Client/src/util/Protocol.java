@@ -63,6 +63,7 @@ public class Protocol {
 
     public static final String SVR_FILE_MESSAGE = "/filemsg ";
     public static final String CMD_FILE_DOWNLOAD = "/filedownload ";
+    public static final String SVR_FILE_DOWNLOAD = "/filedownload ";
 
     // Delimiter cho các tham số trong message
     public static final String PARAM_DELIMITER = "|";

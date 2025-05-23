@@ -67,7 +67,7 @@ public class FileTransferPanel extends JPanel {
                 client.sendFileRequest(receiver, file);
 
                 // Lưu file để upload khi nhận được chấp nhận từ server
-                client.addFileToUpload(fileId, file);
+//                client.addFileToUpload(fileId, file);
 
                 // Hiển thị file trong khu vực chat
                 client.displayFileMessage(receiver, client.getCurrentUser().getUsername(),

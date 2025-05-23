@@ -75,6 +75,8 @@ public class FileService {
             String command = dis.readUTF();
             String fileId = dis.readUTF();
 
+            System.out.println("Nhận yêu cầu chuyển file: " + command + ", fileId: " + fileId);
+
             FileTransferInfo transferInfo = activeTransfers.get(fileId);
             if (transferInfo == null) {
                 dos.writeBoolean(false);
@@ -143,43 +145,115 @@ public class FileService {
 
     private static void sendFileToClient(DataInputStream dis, DataOutputStream dos,
                                          FileTransferInfo transferInfo) throws IOException {
+        System.out.println("Processing download request for fileId: " + transferInfo.fileId);
+
+        // Lấy thông tin file từ database
         FileInfo fileInfo = FileDAO.getFileInfoById(transferInfo.fileId);
 
         if (fileInfo == null) {
-            dos.writeBoolean(false);
+            System.out.println("File info not found in database for fileId: " + transferInfo.fileId);
+            dos.writeBoolean(false); // Gửi false nếu không tìm thấy file info
+            dos.flush();
             return;
         }
 
+        // Kiểm tra file có tồn tại trên disk không
         File file = new File(fileInfo.getStoragePath());
         if (!file.exists()) {
-            dos.writeBoolean(false);
+            System.out.println("Physical file not found: " + fileInfo.getStoragePath());
+            dos.writeBoolean(false); // Gửi false nếu file không tồn tại
+            dos.flush();
             return;
         }
 
-        dos.writeBoolean(true);
-        dos.writeLong(file.length());
+        // Kiểm tra file có thể đọc được không
+        if (!file.canRead()) {
+            System.out.println("Cannot read file: " + fileInfo.getStoragePath());
+            dos.writeBoolean(false);
+            dos.flush();
+            return;
+        }
 
-        try (FileInputStream fis = new FileInputStream(file)) {
+        long fileSize = file.length();
+        System.out.println("Sending file: " + fileInfo.getFileName() + ", size: " + fileSize + " bytes");
+
+        // Gửi thông tin thành công
+        dos.writeBoolean(true); // File có thể được download
+        dos.writeLong(fileSize); // Gửi kích thước file thực tế
+        dos.flush();
+
+        // Gửi dữ liệu file
+        FileInputStream fis = null;
+        try {
+            fis = new FileInputStream(file);
             byte[] buffer = new byte[8192];
             int bytesRead;
             long totalBytesSent = 0;
+            int lastProgress = 0;
+
+            System.out.println("Starting file data transmission...");
 
             while ((bytesRead = fis.read(buffer)) != -1) {
                 dos.write(buffer, 0, bytesRead);
                 totalBytesSent += bytesRead;
 
-                int progressPercent = (int) ((totalBytesSent * 100) / file.length());
-                dos.writeInt(progressPercent);
-                dos.flush();
+                // Tính toán và hiển thị tiến trình
+                int progressPercent = (int) ((totalBytesSent * 100) / fileSize);
+                if (progressPercent > lastProgress) {
+                    System.out.println("Upload progress: " + progressPercent + "% (" + totalBytesSent + "/" + fileSize + " bytes)");
+                    lastProgress = progressPercent;
+                }
+
+                // Flush để đảm bảo dữ liệu được gửi ngay
+                if (totalBytesSent % (buffer.length * 4) == 0) { // Flush mỗi 32KB
+                    dos.flush();
+                }
+            }
+
+            // Flush cuối cùng để đảm bảo tất cả dữ liệu được gửi
+            dos.flush();
+
+            System.out.println("File transmission completed successfully. Total bytes sent: " + totalBytesSent);
+
+            // Cập nhật trạng thái file đã được tải
+            updateFileDownloadStatus(transferInfo.fileId, transferInfo.receiver);
+
+        } catch (IOException e) {
+            System.err.println("Error sending file data: " + e.getMessage());
+            throw e; // Re-throw để handleFileTransfer xử lý
+        } finally {
+            if (fis != null) {
+                try {
+                    fis.close();
+                } catch (IOException e) {
+                    System.err.println("Error closing file input stream: " + e.getMessage());
+                }
             }
         }
     }
 
+    // Helper method để cập nhật trạng thái download
+    private static void updateFileDownloadStatus(String fileId, String receiver) {
+        try {
+            // Thông báo cho người nhận rằng file đã được tải thành công
+            ClientHandler receiverHandler = ChatServer.getClientHandler(receiver);
+            if (receiverHandler != null) {
+                receiverHandler.sendMessage(Protocol.SVR_FILE_DOWNLOAD + fileId);
+            }
+
+            // Log thông tin
+            System.out.println("File download completed for user: " + receiver + ", fileId: " + fileId);
+
+        } catch (Exception e) {
+            System.err.println("Error updating file download status: " + e.getMessage());
+        }
+    }
+
     public static String createFileTransferRequest(String sender, String receiver,
-                                                   String fileName, long fileSize) {
+                                                   String fileName, long fileSize, String fileId) {
 
         // Tạo ID duy nhất cho phiên chuyển file này
-        String fileId = UUID.randomUUID().toString();
+//        String fileId = UUID.randomUUID().toString();
 
         // Lưu thông tin chuyển file
         FileTransferInfo transferInfo = new FileTransferInfo(
