@@ -58,20 +58,24 @@ public class FileTransferPanel extends JPanel {
                     continue;
                 }
 
-                String fileId = UUID.randomUUID().toString();
+//                String fileId = UUID.randomUUID().toString();
 
                 // Thêm progress bar cho upload
-                JProgressBar progressBar = addUploadProgressBar(file.getName(), receiver);
+//                JProgressBar progressBar = addUploadProgressBar(file.getName(), receiver);
 
                 // Gửi yêu cầu chuyển file đến server
-                client.sendFileRequest(receiver, file);
+                String fileId =  client.sendFileRequest(receiver, file);
+
+                JProgressBar progressBar = addUploadProgressBar(file.getName(), receiver, fileId);
 
                 // Lưu file để upload khi nhận được chấp nhận từ server
 //                client.addFileToUpload(fileId, file);
 
                 // Hiển thị file trong khu vực chat
-                client.displayFileMessage(receiver, client.getCurrentUser().getUsername(),
-                        file.getName(), file.length(), fileId, "Đang chờ xác nhận...");
+//                client.displayFileMessage(receiver, client.getCurrentUser().getUsername(),
+//                        file.getName(), file.length(), fileId, "Đang chờ xác nhận...");
+//                client.displayFileMessage(receiver, client.getCurrentUser().getUsername(),
+//                        file.getName(), file.length(), fileId, "Đang gửi file...");
             }
         }
     }
@@ -150,7 +154,7 @@ public class FileTransferPanel extends JPanel {
     }
 
     // Thêm progress bar cho upload
-    private JProgressBar addUploadProgressBar(String fileName, String receiver) {
+    private JProgressBar addUploadProgressBar(String fileName, String receiver, String fileId) {
         JPanel filePanel = new JPanel(new BorderLayout(5, 0));
         filePanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 50));
         filePanel.setBorder(BorderFactory.createEmptyBorder(3, 3, 3, 3));
@@ -168,7 +172,6 @@ public class FileTransferPanel extends JPanel {
         uploadPanel.revalidate();
         uploadPanel.repaint();
 
-        String fileId = fileName + "_" + System.currentTimeMillis();
         uploadProgressBars.put(fileId, progressBar);
 
         return progressBar;
@@ -197,6 +200,16 @@ public class FileTransferPanel extends JPanel {
         downloadProgressBars.put(fileId, progressBar);
 
         return progressBar;
+    }
+
+    public void updateUploadProgress(String fileId, int progress) {
+        JProgressBar progressBar = uploadProgressBars.get(fileId);
+        if (progressBar != null) {
+            progressBar.setValue(progress);
+            if (progress >= 100) {
+                removeUploadProgressBar(fileId);
+            }
+        }
     }
 
     // Xóa progress bar upload khi hoàn thành

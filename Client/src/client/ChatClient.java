@@ -228,10 +228,10 @@ public class ChatClient {
     }
 
     // Gửi yêu cầu chuyển file
-    public void sendFileRequest(String receiver, File file) {
+    public String sendFileRequest(String receiver, File file) {
         if (file == null || !file.exists()) {
             System.out.println("ERROR: File không tồn tại");
-            return;
+            return null;
         }
 
         String fileName = file.getName();
@@ -246,7 +246,12 @@ public class ChatClient {
         // Gửi yêu cầu chuyển file
         serverConnection.sendFileRequest(receiver, fileName, fileSize, fileId);
 
+        // Hiển thị thông báo trong chat khi gửi yêu cầu
+        displayFileMessage(receiver, getCurrentUser().getUsername(), fileName, fileSize, fileId, "Đang gửi file...");
+
         System.out.println("Sent file request: fileId=" + fileId + ", to=" + receiver + ", filename=" + fileName);
+
+        return fileId;
     }
 
     // Chấp nhận file
@@ -744,9 +749,15 @@ public class ChatClient {
 
             System.out.println("Received file request: fileId=" + fileId + ", sender=" + sender + ", filename=" + fileName);
 
-            // Nếu là người nhận file
-            if (!sender.equals(currentUser.getUsername())) {
-                // Tự động chấp nhận file
+            // QUAN TRỌNG: Phần code này cần sửa
+            if (sender.equals(currentUser.getUsername())) {
+                // Người gửi file - chỉ hiển thị MỘT thông báo
+//                if (chatFrame != null) {
+//                    // Đảm bảo là chỉ hiển thị một dòng thông báo
+//                    chatFrame.displayFileMessage(sender, sender, fileName, fileSize, fileId, "Đang chờ gửi...");
+//                }
+            } else {
+                // Người nhận file
                 serverConnection.sendMessage(Protocol.CMD_FILE_ACCEPT + fileId);
 
                 // Tạo đường dẫn file để lưu
@@ -779,12 +790,6 @@ public class ChatClient {
                 if (chatFrame != null) {
                     chatFrame.displayFileMessage(sender, sender, fileName, fileSize, fileId, "Đang chờ nhận file...");
                 }
-            } else {
-                // Nếu là người gửi file (nhận lại thông báo xác nhận đã gửi yêu cầu)
-                // KHÔNG XÓA file khỏi map ở đây
-                if (chatFrame != null) {
-                    chatFrame.displayFileMessage(sender, sender, fileName, fileSize, fileId, "Đang chờ gửi...");
-                }
             }
         }
     }
@@ -809,10 +814,28 @@ public class ChatClient {
             File fileToSend = getFileToUpload(fileId);
             if (fileToSend != null) {
                 System.out.println("Starting upload file: " + fileToSend.getName());
+
+                // Cập nhật trạng thái trước khi bắt đầu upload
+                if (chatFrame != null) {
+                    SwingUtilities.invokeLater(() -> {
+                        chatFrame.updateFileStatus(fileId, "Đang gửi file...");
+                    });
+                }
+
                 // Thực hiện upload
                 uploadFile(fileId, fileToSend, "receiver", progress -> {
                     if (chatFrame != null) {
-                        chatFrame.updateFileUploadProgress(fileId, progress);
+                        if (progress < 100) {
+                            SwingUtilities.invokeLater(() -> {
+                                chatFrame.updateFileStatus(fileId, "Đang gửi: " + progress + "%");
+                                chatFrame.updateUploadProgressBar(fileId, progress);
+                            });
+                        } else {
+                            SwingUtilities.invokeLater(() -> {
+                                chatFrame.updateFileStatus(fileId, "Đã gửi thành công");
+                                chatFrame.updateUploadProgressBar(fileId, 100);
+                            });
+                        }
                     }
                 });
             } else {
@@ -838,6 +861,7 @@ public class ChatClient {
                             if (progress < 100) {
                                 chatFrame.updateFileStatus(fileId, "Đang tải: " + progress + "%");
                             } else {
+                                chatFrame.updateFileComponent(fileId, savePath);
                                 chatFrame.updateFileStatus(fileId, "Đã tải xong");
                                 // Thông báo cho người dùng
                                 chatFrame.showNotification("Đã tải xong file " + fileName + " từ " + sender);

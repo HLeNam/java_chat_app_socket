@@ -8,10 +8,7 @@ import ui.components.FileTransferPanel;
 import javax.swing.*;
 import javax.swing.event.ChangeEvent;
 import javax.swing.event.ChangeListener;
-import javax.swing.text.BadLocationException;
-import javax.swing.text.Style;
-import javax.swing.text.StyleConstants;
-import javax.swing.text.StyledDocument;
+import javax.swing.text.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.text.SimpleDateFormat;
@@ -818,73 +815,201 @@ public class ChatFrame extends JFrame {
     // Hiển thị tin nhắn file trong chat
     public void displayFileMessage(String chatContext, String sender, String fileName,
                                    long fileSize, String fileId, String status) {
+        SwingUtilities.invokeLater(() -> {
+            JTextPane chatArea = getOrCreateChatArea(chatContext);
 
-        JTextPane chatArea = getOrCreateChatArea(chatContext);
+            // In thông tin debug
+            System.out.println("Displaying file message: chatContext=" + chatContext +
+                    ", sender=" + sender + ", fileName=" + fileName +
+                    ", fileId=" + fileId + ", status=" + status);
 
-        // Kiểm tra xem đã có các component file trong chat chưa
-        boolean found = false;
-        FileMessageComponent fileComponent = null;
+            // Kiểm tra xem đã có các component file trong chat chưa
+            boolean found = false;
+            FileMessageComponent fileComponent = null;
 
-        Component[] components = chatArea.getComponents();
-        for (Component comp : components) {
-            // Cập nhật component file nếu đã có
-            if (comp instanceof FileMessageComponent &&
-                    ((FileMessageComponent) comp).getFileId().equals(fileId)) {
-                fileComponent = (FileMessageComponent) comp;
-                fileComponent.updateStatus(status);
-                found = true;
-                break;
+            // Tìm kiếm trong StyledDocument thay vì trong danh sách components
+            StyledDocument doc = chatArea.getStyledDocument();
+            for (int i = 0; i < doc.getLength(); i++) {
+                Element elem = doc.getCharacterElement(i);
+                AttributeSet attrs = elem.getAttributes();
+
+                if (StyleConstants.getComponent(attrs) instanceof FileMessageComponent) {
+                    FileMessageComponent comp = (FileMessageComponent) StyleConstants.getComponent(attrs);
+
+                    if (comp.getFileId() != null && comp.getFileId().equals(fileId)) {
+                        // Cập nhật component file đã tồn tại
+                        comp.updateStatus(status);
+                        found = true;
+                        System.out.println("Updated existing file component status to: " + status);
+                        break;
+                    }
+                }
             }
-        }
 
-        // Nếu chưa có component file, tạo mới
-        if (!found) {
-            fileComponent = new FileMessageComponent(fileName, fileSize, fileId, sender, status, null);
+            // Nếu chưa có component file, tạo mới
+            if (!found) {
+                fileComponent = new FileMessageComponent(fileName, fileSize, fileId, sender, status, null);
+                System.out.println("Created new file component with id=" + fileId);
 
-            try {
-                // Thêm component vào chat area
+                try {
+                    // Thêm component vào chat area
+                    Style style = chatArea.addStyle("FileStyle", null);
+                    StyleConstants.setComponent(style, fileComponent);
+
+                    // Thêm thời gian và người gửi
+                    SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss");
+                    String timeString = "[" + sdf.format(new Date()) + "] ";
+                    doc.insertString(doc.getLength(), timeString + sender + ": \n", null);
+
+                    // Thêm component file
+                    doc.insertString(doc.getLength(), " ", style);
+                    doc.insertString(doc.getLength(), "\n\n", null);
+
+                    // Cuộn xuống để hiển thị tin nhắn mới nhất
+                    chatArea.setCaretPosition(doc.getLength());
+                } catch (BadLocationException e) {
+                    e.printStackTrace();
+                }
+            }
+
+            // Nếu đây là file từ người dùng khác và không phải là current tab,
+            // thông báo có tin nhắn mới
+            if (!sender.equals(client.getCurrentUser().getUsername()) &&
+                    !chatContext.equals(getCurrentTabName())) {
+                highlightTab(chatContext);
+            }
+        });
+    }
+
+    public void updateUploadProgressBar(String fileId, int progress) {
+        SwingUtilities.invokeLater(() -> {
+            fileTransferPanel.updateUploadProgress(fileId, progress);
+        });
+    }
+
+    public void updateFileComponent(String fileId, String filePath) {
+        SwingUtilities.invokeLater(() -> {
+            System.out.println("Updating file path for: " + fileId + " to: " + filePath);
+
+            // Duyệt qua tất cả các tab chat
+            for (Map.Entry<String, JTextPane> entry : chatPanels.entrySet()) {
+                JTextPane chatArea = entry.getValue();
                 StyledDocument doc = chatArea.getStyledDocument();
-                Style style = chatArea.addStyle("FileStyle", null);
-                StyleConstants.setComponent(style, fileComponent);
 
-                // Thêm thời gian và người gửi
-                SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss");
-                String timeString = "[" + sdf.format(new Date()) + "] ";
-                doc.insertString(doc.getLength(), timeString + sender + ": \n", null);
+                // Duyệt qua tất cả các phần tử trong document
+                for (int i = 0; i < doc.getLength(); i++) {
+                    Element elem = doc.getCharacterElement(i);
+                    AttributeSet attrs = elem.getAttributes();
 
-                // Thêm component file
-                doc.insertString(doc.getLength(), " ", style);
-                doc.insertString(doc.getLength(), "\n\n", null);
+                    if (StyleConstants.getComponent(attrs) instanceof FileMessageComponent) {
+                        FileMessageComponent comp = (FileMessageComponent) StyleConstants.getComponent(attrs);
 
-                // Cuộn xuống để hiển thị tin nhắn mới nhất
-                chatArea.setCaretPosition(doc.getLength());
-            } catch (BadLocationException e) {
-                e.printStackTrace();
+                        if (comp.getFileId() != null && comp.getFileId().equals(fileId)) {
+                            // Cập nhật filePath
+                            comp.setFilePath(filePath);
+                            System.out.println("Found and updated file path for: " + fileId);
+                            return;
+                        }
+                    }
+                }
             }
-        }
 
-        // Nếu đây là file từ người dùng khác và không phải là current tab,
-        // thông báo có tin nhắn mới
-        if (!sender.equals(client.getCurrentUser().getUsername()) &&
-                !chatContext.equals(getCurrentTabName())) {
-            highlightTab(chatContext);
-        }
+            // Kiểm tra trong các tab nhóm nếu cần
+            for (Map.Entry<String, JTextPane> entry : groupChatPanels.entrySet()) {
+                // Tương tự code ở trên
+            }
+        });
     }
 
     public void updateFileStatus(String fileId, String status) {
-        // Tìm và cập nhật file component trong tất cả các tab chat
-        for (Map.Entry<String, JTextPane> entry : chatPanels.entrySet()) {
-            JTextPane chatArea = entry.getValue();
+        SwingUtilities.invokeLater(() -> {
+            System.out.println("DEBUG: Trying to update file status: fileId=" + fileId + ", status=" + status);
+            boolean found = false;
+
+            // Tìm qua tất cả các chatPanel
+            for (Map.Entry<String, JTextPane> entry : chatPanels.entrySet()) {
+                JTextPane chatArea = entry.getValue();
+
+                // Tìm component trong StyledDocument thay vì trong JTextPane
+                StyledDocument doc = chatArea.getStyledDocument();
+
+                // Duyệt qua tất cả các vị trí trong document
+                for (int i = 0; i < doc.getLength(); i++) {
+                    Element elem = doc.getCharacterElement(i);
+                    AttributeSet attrs = elem.getAttributes();
+
+                    // Kiểm tra xem tại vị trí này có component nào không
+                    if (StyleConstants.getComponent(attrs) instanceof FileMessageComponent) {
+                        FileMessageComponent comp = (FileMessageComponent) StyleConstants.getComponent(attrs);
+
+                        // Kiểm tra fileId
+                        if (comp.getFileId() != null && comp.getFileId().equals(fileId)) {
+                            // Cập nhật trạng thái
+                            comp.updateStatus(status);
+                            found = true;
+                            System.out.println("Found and updated file component in tab: " + entry.getKey());
+                            break;
+                        }
+                    }
+                }
+
+                if (found) break;
+            }
+
+            // Làm tương tự cho group chat panels nếu cần
+            if (!found) {
+                for (Map.Entry<String, JTextPane> entry : groupChatPanels.entrySet()) {
+                    // [Tương tự code ở trên cho group chat panels]
+                    JTextPane chatArea = entry.getValue();
+                    StyledDocument doc = chatArea.getStyledDocument();
+
+                    for (int i = 0; i < doc.getLength(); i++) {
+                        Element elem = doc.getCharacterElement(i);
+                        AttributeSet attrs = elem.getAttributes();
+
+                        if (StyleConstants.getComponent(attrs) instanceof FileMessageComponent) {
+                            FileMessageComponent comp = (FileMessageComponent) StyleConstants.getComponent(attrs);
+
+                            if (comp.getFileId() != null && comp.getFileId().equals(fileId)) {
+                                comp.updateStatus(status);
+                                found = true;
+                                System.out.println("Found and updated file component in group tab: " + entry.getKey());
+                                break;
+                            }
+                        }
+                    }
+
+                    if (found) break;
+                }
+            }
+
+            if (!found) {
+                System.out.println("WARNING: No FileMessageComponent found for fileId: " + fileId);
+            }
+        });
+    }
+
+    public void ensureFileMessageExists(String chatContext, String sender, String fileName,
+                                        long fileSize, String fileId, String status) {
+        SwingUtilities.invokeLater(() -> {
+            JTextPane chatArea = getOrCreateChatArea(chatContext);
+            boolean found = false;
 
             Component[] components = chatArea.getComponents();
             for (Component comp : components) {
                 if (comp instanceof FileMessageComponent &&
                         ((FileMessageComponent) comp).getFileId().equals(fileId)) {
+                    found = true;
                     ((FileMessageComponent) comp).updateStatus(status);
                     break;
                 }
             }
-        }
+
+            if (!found) {
+                // Nếu không tìm thấy, tạo mới component
+                displayFileMessage(chatContext, sender, fileName, fileSize, fileId, status);
+            }
+        });
     }
 
     // Cập nhật tiến trình upload file

@@ -21,6 +21,7 @@ public class FileMessageComponent extends JPanel {
 
         if (status.contains("thành công")) {
             this.isCompleted = true;
+            System.out.println("File đã tải về thành công: " + fileName);
         }
 
         setLayout(new BorderLayout(5, 0));
@@ -112,7 +113,7 @@ public class FileMessageComponent extends JPanel {
         this.status = newStatus;
 
         // Đánh dấu là đã hoàn tất nếu thành công
-        if (newStatus.contains("thành công")) {
+        if (newStatus.contains("thành công") || newStatus.contains("Đã tải xong")) {
             this.isCompleted = true;
         }
 
@@ -132,7 +133,7 @@ public class FileMessageComponent extends JPanel {
         }
 
         // Thêm button mở file nếu đã tải về thành công
-        if (filePath != null && !filePath.isEmpty() && newStatus.contains("thành công")) {
+        if (filePath != null && !filePath.isEmpty() && (newStatus.contains("thành công") || newStatus.contains("Đã tải xong"))) {
             if (getComponentCount() < 3) {  // Chưa có button
                 JButton openButton = new JButton("Mở");
                 openButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
@@ -147,6 +148,35 @@ public class FileMessageComponent extends JPanel {
                 repaint();
             }
         }
+    }
+
+    // Thêm phương thức này vào FileMessageComponent.java
+    public void setFilePath(String filePath) {
+        this.filePath = filePath;
+        System.out.println("filePath updated to: " + filePath + " for fileId: " + fileId);
+
+        // Nếu là file đã tải xong, thêm button
+        if ((status.contains("thành công") || status.contains("Đã tải xong")) && filePath != null && !filePath.isEmpty()) {
+            if (getComponentCount() < 3) {  // Chưa có button
+                addOpenButton();
+            }
+        }
+    }
+
+    // Tách phần tạo button thành phương thức riêng
+    private void addOpenButton() {
+        System.out.println("Thêm button mở file cho fileId: " + fileId);
+        JButton openButton = new JButton("Mở");
+        openButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+        openButton.addActionListener(e -> openFile());
+
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        buttonPanel.setOpaque(false);
+        buttonPanel.add(openButton);
+
+        add(buttonPanel, BorderLayout.EAST);
+        revalidate();
+        repaint();
     }
 
     // Kiểm tra file đã hoàn tất chưa

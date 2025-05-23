@@ -70,10 +70,20 @@ public class FileTransferClient {
 
                     dos.flush();
 
-                    // Kết thúc upload
+                    // Kết thúc upload - đợi thêm thời gian để đảm bảo dữ liệu được truyền đi
+                    try { Thread.sleep(500); } catch (InterruptedException e) {}
+
+                    // Gửi thông báo đã hoàn thành 100%
                     progressCallback.accept(100);
 
                     System.out.println("File upload completed: fileId=" + fileId);
+
+                    // Đảm bảo client biết rằng file đã được gửi thành công
+                    if (client != null) {
+                        SwingUtilities.invokeLater(() -> {
+                            client.updateFileStatusInChat(fileId, receiver, "Đã gửi thành công");
+                        });
+                    }
                 }
 
                 socket.close();
