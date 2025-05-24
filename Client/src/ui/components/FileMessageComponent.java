@@ -1,5 +1,7 @@
 package ui.components;
 
+import client.ChatClient;
+
 import javax.swing.*;
 import java.awt.*;
 import java.io.File;
@@ -9,15 +11,29 @@ public class FileMessageComponent extends JPanel {
     private String fileId;
     private String filePath;
     private long fileSize;
+    private String fileName;
+    private String sender;
     private String status;
     private boolean isCompleted = false;
+    private boolean fileExists;
+    private ChatClient client;
 
     public FileMessageComponent(String fileName, long fileSize, String fileId, String sender,
-                                String status, String filePath) {
+                                String status, String filePath, ChatClient client) {
         this.fileId = fileId;
         this.fileSize = fileSize;
         this.status = status;
         this.filePath = filePath;
+        this.client = client;
+        this.fileName = fileName;
+        this.sender = sender;
+
+        // Kiểm tra xem file đã tồn tại hay chưa
+        this.fileExists = false;
+        if (filePath != null && !filePath.isEmpty()) {
+            File file = new File(filePath);
+            this.fileExists = file.exists();
+        }
 
         if (status.contains("thành công")) {
             this.isCompleted = true;
@@ -73,6 +89,8 @@ public class FileMessageComponent extends JPanel {
         add(infoPanel, BorderLayout.CENTER);
 
         setBackground(new Color(240, 240, 255));
+
+//        updateFileButton();
     }
 
     private void openFile() {
@@ -81,14 +99,20 @@ public class FileMessageComponent extends JPanel {
             if (file.exists()) {
                 Desktop.getDesktop().open(file);
             } else {
-                JOptionPane.showMessageDialog(this,
-                        "File không tồn tại hoặc đã bị di chuyển.",
-                        "Lỗi", JOptionPane.ERROR_MESSAGE);
+                // Nếu file không tồn tại, hỏi người dùng có muốn tải lại không
+                int option = JOptionPane.showConfirmDialog(this,
+                        "File không tồn tại hoặc đã bị di chuyển. Bạn có muốn tải lại từ server không?",
+                        "File không tồn tại", JOptionPane.YES_NO_OPTION);
+
+                if (option == JOptionPane.YES_OPTION) {
+                    downloadFileFromServer();
+                }
             }
         } catch (Exception e) {
             JOptionPane.showMessageDialog(this,
                     "Không thể mở file: " + e.getMessage(),
                     "Lỗi", JOptionPane.ERROR_MESSAGE);
+            e.printStackTrace();
         }
     }
 
@@ -118,16 +142,22 @@ public class FileMessageComponent extends JPanel {
         }
 
         // Cập nhật label hiển thị trạng thái
-        Component[] components = ((JPanel)getComponent(1)).getComponents();
-        for (Component comp : components) {
-            if (comp instanceof JLabel) {
-                JLabel label = (JLabel)comp;
-                if (label.getText().startsWith("Đang") ||
-                        label.getText().contains("thành công") ||
-                        label.getText().contains("từ chối") ||
-                        label.getText().contains("chờ")) {
-                    label.setText(newStatus);
-                    break;
+        // Tìm kiếm các JLabel trong infoPanel
+        for (Component comp : getComponents()) {
+            if (comp instanceof JPanel) {
+                JPanel panel = (JPanel) comp; // Lấy panel
+                Component[] panelComponents = panel.getComponents();
+                for (Component labelComp : panelComponents) {
+                    if (labelComp instanceof JLabel) {
+                        JLabel label = (JLabel) labelComp;
+                        if (label.getText().startsWith("Đang") ||
+                                label.getText().contains("thành công") ||
+                                label.getText().contains("từ chối") ||
+                                label.getText().contains("chờ")) {
+                            label.setText(newStatus);
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -135,17 +165,7 @@ public class FileMessageComponent extends JPanel {
         // Thêm button mở file nếu đã tải về thành công
         if (filePath != null && !filePath.isEmpty() && (newStatus.contains("thành công") || newStatus.contains("Đã tải xong"))) {
             if (getComponentCount() < 3) {  // Chưa có button
-                JButton openButton = new JButton("Mở");
-                openButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
-                openButton.addActionListener(e -> openFile());
-
-                JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-                buttonPanel.setOpaque(false);
-                buttonPanel.add(openButton);
-
-                add(buttonPanel, BorderLayout.EAST);
-                revalidate();
-                repaint();
+                addOpenButton();
             }
         }
     }
@@ -177,6 +197,51 @@ public class FileMessageComponent extends JPanel {
         add(buttonPanel, BorderLayout.EAST);
         revalidate();
         repaint();
+    }
+
+    private void updateFileButton() {
+        // Xóa button cũ nếu có
+        for (Component comp : getComponents()) {
+            if (comp instanceof JPanel && ((JPanel) comp).getLayout() instanceof FlowLayout) {
+                remove(comp);
+            }
+        }
+
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        buttonPanel.setOpaque(false);
+
+        if (fileExists && (status.contains("thành công") || status.contains("Đã tải xong"))) {
+            // File tồn tại - hiển thị nút mở
+            JButton openButton = new JButton("Mở");
+            openButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+            openButton.addActionListener(e -> openFile());
+            buttonPanel.add(openButton);
+        } else if (!fileExists && filePath != null && !filePath.isEmpty()) {
+            // File không tồn tại nhưng có đường dẫn - hiển thị nút tải
+            JButton downloadButton = new JButton("Tải xuống");
+            downloadButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+            downloadButton.addActionListener(e -> downloadFileFromServer());
+            buttonPanel.add(downloadButton);
+        }
+
+        if (!buttonPanel.getComponents().equals(0)) {
+            add(buttonPanel, BorderLayout.EAST);
+        }
+
+        revalidate();
+        repaint();
+    }
+
+    private void downloadFileFromServer() {
+        if (client != null) {
+            String savePath = ChatClient.defaultDownloadFolder + File.separator + fileName;
+
+            // Cập nhật UI để hiển thị đang tải
+            updateStatus("Đang tải từ server...");
+
+            // Gọi phương thức tải file từ server
+            client.downloadFileFromServer(fileId, sender, fileName, fileSize);
+        }
     }
 
     // Kiểm tra file đã hoàn tất chưa

@@ -6,10 +6,7 @@ import db.UserDAO;
 import service.FileService;
 import util.Protocol;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
+import java.io.*;
 import java.net.Socket;
 import java.util.List;
 import java.util.Map;
@@ -88,6 +85,22 @@ public class ClientHandler implements Runnable {
             handleFileAccept(message);
         } else if (message.startsWith(Protocol.CMD_FILE_REJECT)) {
             handleFileReject(message);
+        } else if (message.startsWith(Protocol.CMD_GROUP_FILE_SEND)) {
+            handleGroupFileSend(message);
+        } else if (message.startsWith(Protocol.CMD_CHANGE_MESSAGE_ACTUAL_FILENAME_SAVE)) {
+            handleChangeMessageActualFilenameSave(message);
+        } else if (message.startsWith(Protocol.CMD_CHANGE_MESSAGE_ACTUAL_FILENAME_UPLOAD)) {
+            handleChangeMessageActualFilenameUpload(message);
+        } else if (message.startsWith(Protocol.CMD_GROUP_FILE_ACCEPT)) {
+            handleGroupFileAccept(message);
+        }  else if (message.startsWith(Protocol.CMD_CHANGE_MESSAGE_GROUP_ACTUAL_FILENAME_SAVE)) {
+            handleChangeMessageGroupActualFilenameSave(message);
+        } else if (message.startsWith(Protocol.CMD_CHANGE_MESSAGE_GROUP_ACTUAL_FILENAME_UPLOAD)) {
+            handleChangeMessageGroupActualFilenameUpload(message);
+        } else if (message.startsWith(Protocol.CMD_FILE_DOWNLOAD)) {
+            handleFileDownloadRequest(message);
+        } else if (message.startsWith(Protocol.CMD_FILE_DOWNLOAD_ACCEPT)) {
+            handleFileDownloadAccept(message);
         }
     }
 
@@ -159,9 +172,10 @@ public class ClientHandler implements Runnable {
 
         String receiver = parts[0];
         String messageContent = parts[1];
+        String sender = username;
 
         System.out.println("Người nhận: " + receiver);
-        System.out.println("Người gửi: " + username);
+        System.out.println("Người gửi: " + sender);
         System.out.println("Nội dung tin nhắn: " + messageContent);
 
         if (!UserDAO.usernameExists(receiver)) {
@@ -170,9 +184,11 @@ public class ClientHandler implements Runnable {
         }
 
         // Lưu tin nhắn vào database
-        MessageDAO.saveMessage(username, receiver, messageContent, "private");
+        long timestamp = System.currentTimeMillis();
+        MessageDAO.saveTextMessage(sender, receiver, messageContent, "private", false, timestamp);
 
-        String privateMessage = Protocol.SVR_PRIVATE_MSG + username + Protocol.PARAM_DELIMITER + messageContent;
+        String privateMessage = Protocol.SVR_PRIVATE_MSG + sender + Protocol.PARAM_DELIMITER + messageContent +
+                Protocol.PARAM_DELIMITER + timestamp;
 
         ClientHandler receiverHandler = ChatServer.getClientHandler(receiver);
         if (receiverHandler != null) {
@@ -180,8 +196,9 @@ public class ClientHandler implements Runnable {
         }
 
         // Gửi bản sao cho người gửi (để hiển thị trong chat)
-        out.println(Protocol.SVR_PRIVATE_MSG + receiver + Protocol.PARAM_DELIMITER + messageContent
-                + Protocol.PARAM_DELIMITER + "SENT");
+        out.println(Protocol.SVR_PRIVATE_MSG + receiver + Protocol.PARAM_DELIMITER + messageContent +
+                Protocol.PARAM_DELIMITER + timestamp +
+                Protocol.PARAM_DELIMITER + "SENT");
     }
 
     private void handleGroupMessage(String message) {
@@ -195,6 +212,7 @@ public class ClientHandler implements Runnable {
 
         String groupName = parts[0].trim();
         String messageContent = parts[1];
+        String sender = username;
 
         if (!GroupDAO.groupExists(groupName)) {
             out.println(Protocol.SVR_ERROR + "Nhóm không tồn tại");
@@ -206,7 +224,8 @@ public class ClientHandler implements Runnable {
             return;
         }
 
-        MessageDAO.saveMessage(username, groupName, messageContent, "group");
+        long timestamp = System.currentTimeMillis();
+        MessageDAO.saveTextMessage(sender, groupName, messageContent, "group", true, timestamp);
 
         List<String> members = GroupDAO.getGroupMembers(groupName);
 
@@ -215,8 +234,9 @@ public class ClientHandler implements Runnable {
             if (memberHandler != null) {
                 memberHandler.sendMessage(Protocol.SVR_GROUP_MSG +
                         groupName + Protocol.PARAM_DELIMITER +
-                        username + Protocol.PARAM_DELIMITER +
-                        messageContent);
+                        sender + Protocol.PARAM_DELIMITER +
+                        messageContent + Protocol.PARAM_DELIMITER +
+                        timestamp);
             }
         }
     }
@@ -234,29 +254,71 @@ public class ClientHandler implements Runnable {
         String chatType = parts[1].trim(); // "private", "group", "global"
         int limit = parts.length > 2 ? Integer.parseInt(parts[2]) : 20; // Mặc định 20 tin nhắn
 
-        List<Map<String, Object>> messages = null;
+        boolean isGroup = chatType.equals("group");
 
-        if ("private".equals(chatType)) {
-            messages = MessageDAO.getPrivateMessages(username, chatPartner, limit);
-        } else if ("group".equals(chatType)) {
-            messages = MessageDAO.getGroupMessages(chatPartner, limit);
-        }
+        List<Object[]> chatHistory = MessageDAO.getChatHistory(
+                isGroup ? chatPartner : username,
+                isGroup ? username : chatPartner,
+                isGroup,
+                limit
+        );
+
+//        List<Map<String, Object>> messages = null;
+//
+//        if ("private".equals(chatType)) {
+//            messages = MessageDAO.getPrivateMessages(username, chatPartner, limit);
+//        } else if ("group".equals(chatType)) {
+//            messages = MessageDAO.getGroupMessages(chatPartner, limit);
+//        }
 
         // Gửi kết quả về client
         out.println(Protocol.SVR_CHAT_HISTORY_START);
 
-        if (messages != null && !messages.isEmpty()) {
-            for (Map<String, Object> msg : messages) {
-                String sender = (String) msg.get("sender");
-                String msgContent = (String) msg.get("content");
-                long timestamp = (Long) msg.get("timestamp");
+        for (Object[] messageData : chatHistory) {
+            long id = (long) messageData[0];
+            String sender = (String) messageData[1];
+            String receiver = (String) messageData[2];
+            String messageType = (String) messageData[4];
+            long timestamp = (Long) messageData[5];
 
+            if ("text".equals(messageType)) {
+                String msgContent = (String) messageData[3];
                 out.println(Protocol.SVR_CHAT_HISTORY_ITEM +
                         sender + Protocol.PARAM_DELIMITER +
                         msgContent + Protocol.PARAM_DELIMITER +
-                        timestamp);
+                        timestamp + Protocol.PARAM_DELIMITER +
+                        messageType);
+            } else if ("file".equals(messageType)) {
+                String fileId = (String) messageData[6];
+                String fileName = (String) messageData[7];
+                long fileSize = (Long) messageData[8];
+                String actualFileNameSave = (String) messageData[9];
+                String actualFileNameUpload = (String) messageData[10];
+
+                out.println(Protocol.SVR_CHAT_HISTORY_ITEM +
+                        sender + Protocol.PARAM_DELIMITER +
+                        fileId + Protocol.PARAM_DELIMITER +
+                        fileName + Protocol.PARAM_DELIMITER +
+                        fileSize + Protocol.PARAM_DELIMITER +
+                        timestamp + Protocol.PARAM_DELIMITER +
+                        actualFileNameSave + Protocol.PARAM_DELIMITER +
+                        actualFileNameUpload + Protocol.PARAM_DELIMITER +
+                        messageType);
             }
         }
+
+//        if (messages != null && !messages.isEmpty()) {
+//            for (Map<String, Object> msg : messages) {
+//                String sender = (String) msg.get("sender");
+//                String msgContent = (String) msg.get("content");
+//                long timestamp = (Long) msg.get("timestamp");
+//
+//                out.println(Protocol.SVR_CHAT_HISTORY_ITEM +
+//                        sender + Protocol.PARAM_DELIMITER +
+//                        msgContent + Protocol.PARAM_DELIMITER +
+//                        timestamp);
+//            }
+//        }
 
         out.println(Protocol.SVR_CHAT_HISTORY_END);
     }
@@ -573,13 +635,17 @@ public class ClientHandler implements Runnable {
         }
 
         String fileId = parts[3].trim();
+        String sender = username;
 
         if (!UserDAO.usernameExists(receiver)) {
             out.println(Protocol.SVR_ERROR + "Người dùng không tồn tại.");
             return;
         }
 
-        String _fileId = FileService.createFileTransferRequest(username, receiver, fileName, fileSize, fileId);
+        long timestamp = System.currentTimeMillis();
+        MessageDAO.saveFileMessage(sender, receiver, fileId, fileName, fileSize, "private", false, timestamp);
+
+        String _fileId = FileService.createFileTransferRequest(sender, receiver, fileName, fileSize, fileId);
         if (_fileId == null) {
             out.println(Protocol.SVR_ERROR + "Không thể tạo yêu cầu chuyển file.");
             return;
@@ -589,18 +655,119 @@ public class ClientHandler implements Runnable {
         if (receiverHandler != null) {
             // Thông báo cho người nhận file
             receiverHandler.sendMessage(Protocol.SVR_FILE_REQUEST + fileId +
-                    Protocol.PARAM_DELIMITER + username +
+                    Protocol.PARAM_DELIMITER + sender +
                     Protocol.PARAM_DELIMITER + fileName +
-                    Protocol.PARAM_DELIMITER + fileSize);
+                    Protocol.PARAM_DELIMITER + fileSize +
+                    Protocol.PARAM_DELIMITER + timestamp);
 
             // Thông báo cho người gửi biết đã gửi yêu cầu
             out.println(Protocol.SVR_FILE_REQUEST + fileId +
                     Protocol.PARAM_DELIMITER + receiver +
                     Protocol.PARAM_DELIMITER + fileName +
-                    Protocol.PARAM_DELIMITER + fileSize);
+                    Protocol.PARAM_DELIMITER + fileSize +
+                    Protocol.PARAM_DELIMITER + timestamp);
         } else {
             out.println(Protocol.SVR_ERROR + "Người nhận không online.");
         }
+    }
+
+    private void handleGroupFileSend(String message) {
+        String content = message.substring(Protocol.CMD_GROUP_FILE_SEND.length());
+        String[] parts = content.split("\\|", 4);
+
+        if (parts.length != 4) {
+            out.println(Protocol.SVR_ERROR + "Định dạng yêu cầu file không hợp lệ.");
+            return;
+        }
+
+        String groupName = parts[0].trim();
+        String fileName = parts[1];
+        long fileSize;
+        try {
+            fileSize = Long.parseLong(parts[2]);
+        } catch (NumberFormatException e) {
+            out.println(Protocol.SVR_ERROR + "Kích thước file không hợp lệ.");
+            return;
+        }
+        String fileId = parts[3].trim();
+        String sender = username;
+
+        if (!GroupDAO.groupExists(groupName)) {
+            out.println(Protocol.SVR_ERROR + "Nhóm không tồn tại.");
+            return;
+        }
+
+        if (!GroupDAO.isGroupMember(groupName, sender)) {
+            out.println(Protocol.SVR_ERROR + "Bạn không phải là thành viên của nhóm này.");
+            return;
+        }
+
+        long timestamp = System.currentTimeMillis();
+        MessageDAO.saveFileMessage(sender, groupName, fileId, fileName, fileSize, "group", true, timestamp);
+
+        for (String member : GroupDAO.getGroupMembers(groupName)) {
+            MessageDAO.saveMessageGroupActualFilename(fileId, member);
+        }
+
+        String _fileId = FileService.createFileTransferRequest(sender, groupName, fileName, fileSize, fileId);
+        if (_fileId == null) {
+            out.println(Protocol.SVR_ERROR + "Không thể tạo yêu cầu chuyển file.");
+            return;
+        }
+
+        List<String> members = GroupDAO.getGroupMembers(groupName);
+        boolean hasMemberOnline = false;
+        for (String member : members) {
+            ClientHandler memberHandler = ChatServer.getClientHandler(member);
+            if (memberHandler != null && !member.equals(sender)) {
+                // Thông báo cho tất cả thành viên trong nhóm
+                hasMemberOnline = true;
+                memberHandler.sendMessage(Protocol.SVR_GROUP_FILE_REQUEST + groupName +
+                        Protocol.PARAM_DELIMITER + sender +
+                        Protocol.PARAM_DELIMITER + fileName +
+                        Protocol.PARAM_DELIMITER + fileSize +
+                        Protocol.PARAM_DELIMITER + fileId +
+                        Protocol.PARAM_DELIMITER + memberHandler.username +
+                        Protocol.PARAM_DELIMITER + timestamp);
+            }
+        }
+
+        // Thông báo cho người gửi biết đã gửi yêu cầu
+        out.println(Protocol.SVR_GROUP_FILE_REQUEST + groupName +
+                Protocol.PARAM_DELIMITER + sender +
+                Protocol.PARAM_DELIMITER + fileName +
+                Protocol.PARAM_DELIMITER + fileSize +
+                Protocol.PARAM_DELIMITER + fileId +
+                Protocol.PARAM_DELIMITER + sender +
+                Protocol.PARAM_DELIMITER + timestamp +
+                Protocol.PARAM_DELIMITER + hasMemberOnline);
+    }
+
+    private void handleGroupFileAccept(String message) {
+        String content = message.substring(Protocol.CMD_GROUP_FILE_ACCEPT.length());
+        String[] parts = content.split("\\|", 2);
+
+        if (parts.length != 2) {
+            out.println(Protocol.SVR_ERROR + "Định dạng lệnh không hợp lệ");
+            return;
+        }
+
+        String groupName = parts[0].trim();
+        String fileId = parts[1].trim();
+
+        if (!GroupDAO.groupExists(groupName)) {
+            out.println(Protocol.SVR_ERROR + "Nhóm không tồn tại");
+            return;
+        }
+
+        if (!GroupDAO.isGroupMember(groupName, username)) {
+            out.println(Protocol.SVR_ERROR + "Bạn không phải là thành viên của nhóm này");
+            return;
+        }
+
+        System.out.println("Người dùng " + username + " đã chấp nhận file trong nhóm: " + groupName + ", fileId: " + fileId);
+
+        FileService.acceptFileTransfer(fileId, username, groupName);
     }
 
     private void handleFileAccept(String message) {
@@ -608,7 +775,7 @@ public class ClientHandler implements Runnable {
 
         System.out.println("Client accepts file: fileId=" + fileId + ", username=" + username);
 
-        FileService.acceptFileTransfer(fileId, username);
+        FileService.acceptFileTransfer(fileId, username, null);
     }
 
     private void handleFileReject(String message) {
@@ -616,6 +783,141 @@ public class ClientHandler implements Runnable {
 
         // Xử lý từ chối file
         FileService.rejectFileTransfer(fileId, username);
+    }
+
+    private void handleChangeMessageActualFilenameSave(String message) {
+        String content = message.substring(Protocol.CMD_CHANGE_MESSAGE_ACTUAL_FILENAME_SAVE.length());
+        String[] parts = content.split("\\|", 2);
+
+        if (parts.length != 2) {
+            out.println(Protocol.SVR_ERROR + "Định dạng lệnh không hợp lệ");
+            return;
+        }
+
+        String fileId = parts[0].trim();
+        String actualFileName = parts[1].trim();
+
+        MessageDAO.updateActualFilenameSave(actualFileName, fileId);
+    }
+
+    private void handleChangeMessageGroupActualFilenameSave(String message) {
+        String content = message.substring(Protocol.CMD_CHANGE_MESSAGE_GROUP_ACTUAL_FILENAME_SAVE.length());
+        String[] parts = content.split("\\|", 3);
+
+        if (parts.length != 3) {
+            out.println(Protocol.SVR_ERROR + "Định dạng lệnh không hợp lệ");
+            return;
+        }
+
+        String fileId = parts[0].trim();
+        String actualFileName = parts[1].trim();
+        String username = parts[2].trim();
+
+        MessageDAO.updateActualFilenameSaveInMessageGroupFileName(actualFileName, fileId, username);
+    }
+
+    private void handleChangeMessageActualFilenameUpload(String message) {
+        String content = message.substring(Protocol.CMD_CHANGE_MESSAGE_ACTUAL_FILENAME_UPLOAD.length());
+        String[] parts = content.split("\\|", 2);
+
+        if (parts.length != 2) {
+            out.println(Protocol.SVR_ERROR + "Định dạng lệnh không hợp lệ");
+            return;
+        }
+
+        String fileId = parts[0].trim();
+        String actualFileName = parts[1].trim();
+
+        MessageDAO.updateActualFilenameUpload(actualFileName, fileId);
+    }
+
+    private void handleChangeMessageGroupActualFilenameUpload(String message) {
+        String content = message.substring(Protocol.CMD_CHANGE_MESSAGE_GROUP_ACTUAL_FILENAME_UPLOAD.length());
+        String[] parts = content.split("\\|", 3);
+
+        if (parts.length != 3) {
+            out.println(Protocol.SVR_ERROR + "Định dạng lệnh không hợp lệ");
+            return;
+        }
+
+        String fileId = parts[0].trim();
+        String actualFileName = parts[1].trim();
+        String username = parts[2].trim();
+
+        MessageDAO.updateActualFilenameUploadInMessageGroupFileName(actualFileName, fileId, username);
+    }
+
+    private void handleFileDownloadRequest(String message) {
+        String content = message.substring(Protocol.CMD_FILE_DOWNLOAD.length());
+        String[] parts = content.split("\\|", 5);
+
+        if (parts.length != 5) {
+            out.println(Protocol.SVR_ERROR + "Định dạng yêu cầu tải file không hợp lệ.");
+            return;
+        }
+
+        String fileId = parts[0].trim();
+        String sender = parts[1].trim();
+        String receiver = parts[2].trim();
+        String fileName = parts[3].trim();
+        long fileSize;
+        try {
+            fileSize = Long.parseLong(parts[4].trim());
+        } catch (NumberFormatException e) {
+            out.println(Protocol.SVR_ERROR + "Kích thước file không hợp lệ.");
+            return;
+        }
+
+        if (!UserDAO.usernameExists(receiver)) {
+            out.println(Protocol.SVR_ERROR + "Người dùng không tồn tại.");
+            return;
+        }
+
+        MessageDAO.saveMessageGroupActualFilename(fileId, receiver);
+
+        String _fileId = FileService.createFileTransferRequest(sender, receiver, fileName, fileSize, fileId);
+        if (_fileId == null) {
+            out.println(Protocol.SVR_ERROR + "Không thể tạo yêu cầu chuyển file.");
+            return;
+        }
+
+        ClientHandler receiverHandler = ChatServer.getClientHandler(receiver);
+        if (receiverHandler != null) {
+            // Thông báo cho người nhận file
+            receiverHandler.sendMessage(Protocol.SVR_FILE_DOWNLOAD_REQUEST + fileId +
+                    Protocol.PARAM_DELIMITER + sender +
+                    Protocol.PARAM_DELIMITER + fileName +
+                    Protocol.PARAM_DELIMITER + fileSize);
+        } else {
+            out.println(Protocol.SVR_ERROR + "Người nhận không online.");
+        }
+    }
+
+    private void handleFileDownloadAccept(String message) {
+        String content = message.substring(Protocol.CMD_FILE_DOWNLOAD_ACCEPT.length());
+        String[] parts = content.split("\\|", 2);
+
+        if (parts.length != 2) {
+            out.println(Protocol.SVR_ERROR + "Định dạng lệnh không hợp lệ");
+            return;
+        }
+
+        String fileId = parts[0].trim();
+        String receiver = parts[1].trim();
+
+        if (!UserDAO.usernameExists(receiver)) {
+            out.println(Protocol.SVR_ERROR + "Người dùng không tồn tại");
+            return;
+        }
+
+        ClientHandler receiverHandler = ChatServer.getClientHandler(receiver);
+        FileService.FileTransferInfo transferInfo = FileService.getFileTransferInfo(fileId);
+        if (receiverHandler != null) {
+            receiverHandler.sendMessage(Protocol.SVR_FILE_DOWNLOAD_ACCEPT + transferInfo.getFileId() +
+                    Protocol.PARAM_DELIMITER + transferInfo.getSender() +
+                    Protocol.PARAM_DELIMITER + transferInfo.getFileName() +
+                    Protocol.PARAM_DELIMITER + transferInfo.getFileSize());
+        }
     }
 
     private void handleExit() {

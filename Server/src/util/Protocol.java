@@ -52,18 +52,44 @@ public class Protocol {
     // Lệnh lấy lịch sử chat khi mở tab
     public static final String CMD_GET_CHAT_HISTORY = "/history ";
     public static final String SVR_CHAT_HISTORY_START = "/historystart";
-    public static final String SVR_CHAT_HISTORY_ITEM = "/historyitem ";
+//    public static final String SVR_CHAT_HISTORY_ITEM = "/historyitem ";
     public static final String SVR_CHAT_HISTORY_END = "/historyend";
 
     // Lệnh tải thêm tin nhắn cũ hơn
     public static final String CMD_LOAD_MORE_MESSAGES = "/loadmore ";
     public static final String SVR_LOAD_MORE_START = "/loadmorestart";
-    public static final String SVR_LOAD_MORE_ITEM = "/loadmoreitem ";
+//    public static final String SVR_LOAD_MORE_ITEM = "/loadmoreitem ";
     public static final String SVR_LOAD_MORE_END = "/loadmoreend";
 
     public static final String SVR_FILE_MESSAGE = "/filemsg ";
     public static final String CMD_FILE_DOWNLOAD = "/filedownload ";
     public static final String SVR_FILE_DOWNLOAD = "/filedownload ";
+
+    // File trong group chat
+    public static final String SVR_GROUP_FILE_REQUEST = "/groupfilerequest ";
+    public static final String SVR_GROUP_FILE_ACCEPTED = "/groupfileaccepted ";
+    public static final String CMD_GROUP_FILE_SEND = "/groupfilesend ";
+
+    // Cập nhật định dạng lịch sử chat với timestamp
+    // messageType|sender|content|timestamp hoặc messageType|sender|fileId|fileName|fileSize|timestamp
+    public static final String SVR_CHAT_HISTORY_ITEM = "/historyitem ";
+
+    // Cập nhật định dạng tải thêm tin nhắn
+    // messageType|sender|content|timestamp hoặc messageType|sender|fileId|fileName|fileSize|timestamp
+    public static final String SVR_LOAD_MORE_ITEM = "/loadmoreitem ";
+
+    public static final String CMD_CHANGE_MESSAGE_ACTUAL_FILENAME_SAVE = "/changeactualfilenamesave ";
+    public static final String CMD_CHANGE_MESSAGE_ACTUAL_FILENAME_UPLOAD = "/changeactualfilenameupload ";
+
+    public static final String CMD_GROUP_FILE_ACCEPT = "/groupfileaccept ";
+    public static final String SVR_GROUP_FILE_ACCEPT = "/groupfileaccepted ";
+
+    public static final String CMD_CHANGE_MESSAGE_GROUP_ACTUAL_FILENAME_SAVE = "/changegroupactualfilenamesave ";
+    public static final String CMD_CHANGE_MESSAGE_GROUP_ACTUAL_FILENAME_UPLOAD = "/changegroupactualfilenameupload ";
+
+    public static final String SVR_FILE_DOWNLOAD_REQUEST = "/filedownloadrequest ";
+    public static final String CMD_FILE_DOWNLOAD_ACCEPT = "/filedownloadaccept ";
+    public static final String SVR_FILE_DOWNLOAD_ACCEPT = "/filedownloadaccepted ";
 
     // Delimiter cho các tham số trong message
     public static final String PARAM_DELIMITER = "|";

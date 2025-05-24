@@ -1,6 +1,7 @@
 package service;
 
 import db.FileDAO;
+import db.GroupDAO;
 import model.FileInfo;
 import server.ChatServer;
 import server.ClientHandler;
@@ -14,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,12 +31,13 @@ public class FileService {
     private static Map<String, FileTransferInfo> activeTransfers = new ConcurrentHashMap<>();
 
     // Class để lưu thông tin về một phiên chuyển file
-    private static class FileTransferInfo {
+    public static class FileTransferInfo {
         String fileId;
         String sender;
         String receiver;
         String fileName;
         long fileSize;
+        String groupReceiver; // Thêm trường cho nhóm nếu cần
 
         public FileTransferInfo(String fileId, String sender, String receiver, String fileName, long fileSize) {
             this.fileId = fileId;
@@ -42,6 +45,26 @@ public class FileService {
             this.receiver = receiver;
             this.fileName = fileName;
             this.fileSize = fileSize;
+        }
+
+        public void setGroupReceiver(String groupReceiver) {
+            this.groupReceiver = groupReceiver;
+        }
+
+        public String getFileId() {
+            return fileId;
+        }
+
+        public String getSender() {
+            return sender;
+        }
+
+        public String getFileName() {
+            return fileName;
+        }
+
+        public long getFileSize() {
+            return fileSize;
         }
     }
 
@@ -84,7 +107,11 @@ public class FileService {
             }
 
             if (command.equals("SEND")) {
+                System.out.println("Processing file transfer for fileId: " + fileId);
                 receiveFileFromClient(dis, dos, transferInfo);
+            } else if (command.equals("SEND_GROUP")) {
+                System.out.println("Processing group file transfer for fileId: " + fileId);
+                receiveFileFromClientGroup(dis, dos, transferInfo);
             } else if (command.equals("RECEIVE")) {
                 sendFileToClient(dis, dos, transferInfo);
             }
@@ -140,6 +167,58 @@ public class FileService {
                     Protocol.PARAM_DELIMITER + transferInfo.sender +
                     Protocol.PARAM_DELIMITER + transferInfo.fileName +
                     Protocol.PARAM_DELIMITER + transferInfo.fileSize);
+        }
+    }
+
+    private static void receiveFileFromClientGroup(DataInputStream dis, DataOutputStream dos, FileTransferInfo transferInfo) throws IOException {
+        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+        String uniqueFileName = timestamp + "_" + transferInfo.fileName;
+        String filePath = FILE_STORAGE_DIR + uniqueFileName;
+
+        System.out.println("Receiving file for group: " + transferInfo.receiver);
+
+        dos.writeBoolean(true);
+
+        try (FileOutputStream fos = new FileOutputStream(filePath)) {
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+            long totalBytesRead = 0;
+
+            while (totalBytesRead < transferInfo.fileSize &&
+                    (bytesRead = dis.read(buffer, 0, (int)Math.min(buffer.length,
+                            transferInfo.fileSize - totalBytesRead))) != -1) {
+                fos.write(buffer, 0, bytesRead);
+                totalBytesRead += bytesRead;
+
+                int progressPercent = (int) ((totalBytesRead * 100) / transferInfo.fileSize);
+                dos.writeInt(progressPercent);
+                dos.flush();
+            }
+        }
+
+        FileInfo fileInfo = new FileInfo();
+        fileInfo.setId(transferInfo.fileId);
+        fileInfo.setSender(transferInfo.sender);
+        fileInfo.setReceiver(transferInfo.receiver);
+        fileInfo.setFileName(transferInfo.fileName);
+        fileInfo.setFileSize(transferInfo.fileSize);
+        fileInfo.setStoragePath(filePath);
+        fileInfo.setTimestamp(new Date());
+
+        FileDAO.saveFileInfo(fileInfo);
+
+        List<String> groupMembers = GroupDAO.getGroupMembers(transferInfo.receiver);
+        System.out.println("Group members for " + transferInfo.receiver + ": " + groupMembers);
+
+        for (String member : groupMembers) {
+            System.out.println("Sending file accept notification to group member: " + member);
+            ClientHandler memberHandler = ChatServer.getClientHandler(member);
+            if (memberHandler != null) {
+                memberHandler.sendMessage(Protocol.SVR_GROUP_FILE_ACCEPT + transferInfo.fileId +
+                        Protocol.PARAM_DELIMITER + transferInfo.sender +
+                        Protocol.PARAM_DELIMITER + transferInfo.fileName +
+                        Protocol.PARAM_DELIMITER + transferInfo.fileSize);
+            }
         }
     }
 
@@ -263,7 +342,7 @@ public class FileService {
         return fileId;
     }
 
-    public static void acceptFileTransfer(String fileId, String username) {
+    public static void acceptFileTransfer(String fileId, String username, String groupName) {
         // Thêm log để debug
         System.out.println("File Accept: fileId=" + fileId + ", username=" + username);
 
@@ -277,11 +356,15 @@ public class FileService {
                 ", receiver=" + transferInfo.receiver);
 
         // Kiểm tra nếu người gọi là người nhận file HOẶC là người gửi file
-        if (transferInfo.receiver.equals(username) || transferInfo.sender.equals(username)) {
+        if (transferInfo.receiver.equals(username) || transferInfo.sender.equals(username) || GroupDAO.isGroupMember(groupName, username)) {
             // Thông báo cho người gửi rằng file đã được chấp nhận
             ClientHandler senderHandler = ChatServer.getClientHandler(transferInfo.sender);
             if (senderHandler != null) {
-                senderHandler.sendMessage(Protocol.SVR_FILE_ACCEPT + fileId);
+                if (groupName != null && !groupName.isEmpty()) {
+                    senderHandler.sendMessage(Protocol.SVR_GROUP_FILE_ACCEPT + fileId);
+                } else {
+                    senderHandler.sendMessage(Protocol.SVR_FILE_ACCEPT + fileId);
+                }
             } else {
                 System.out.println("Sender handler not found for: " + transferInfo.sender);
             }
@@ -319,5 +402,9 @@ public class FileService {
                 System.err.println("Lỗi khi đóng file server socket: " + e.getMessage());
             }
         }
+    }
+
+    public static FileTransferInfo getFileTransferInfo(String fileId) {
+        return activeTransfers.get(fileId);
     }
 }

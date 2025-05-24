@@ -7,14 +7,13 @@ import model.Group;
 import model.User;
 import ui.ChatFrame;
 import ui.LoginFrame;
+import util.FileUtil;
 import util.Protocol;
 
+import javax.imageio.IIOException;
 import javax.swing.*;
 import java.io.File;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.function.Consumer;
 
 public class ChatClient {
@@ -41,7 +40,10 @@ public class ChatClient {
     private LocalStorage localStorage;
     private FileTransferClient fileTransferClient;
 
-    private String defaultDownloadFolder;
+    public static String defaultDownloadFolder;
+    public static String defaultUploadFolder;
+
+    private Map<String, Object[]> pendingDownloads = new HashMap<>();
 
     public ChatClient() {
         this("localhost", 9999, 9998);
@@ -51,13 +53,6 @@ public class ChatClient {
         this.serverHost = host;
         this.serverPort = port;
         this.filePort = filePort;
-
-        // Tạo thư mục Downloads trong thư mục của người dùng
-        this.defaultDownloadFolder = System.getProperty("user.home") + File.separator + "ChatAppDownloads";
-        File downloadDir = new File(defaultDownloadFolder);
-        if (!downloadDir.exists()) {
-            downloadDir.mkdirs();
-        }
     }
 
     public boolean connect() {
@@ -138,12 +133,17 @@ public class ChatClient {
 
     private void handleChatHistoryItem(String message) {
         String content = message.substring(Protocol.SVR_CHAT_HISTORY_ITEM.length());
-        String[] parts = content.split("\\|", 3);
+        String[] parts = content.split("\\|", 8);
 
-        if (parts.length >= 3) {
+        if (parts.length >= 4) {
             pendingHistoryMessages.add(parts);
 
-            long timestamp = Long.parseLong(parts[2]);
+            long timestamp;
+            if (parts.length == 4) {
+                timestamp = Long.parseLong(parts[2]);
+            } else {
+                timestamp = Long.parseLong(parts[4]);
+            }
             Long currentOldest = oldestMessageTimestamp.get(currentHistoryContext);
 
             if (currentOldest == null || timestamp < currentOldest) {
@@ -293,6 +293,12 @@ public class ChatClient {
         fileTransferClient.uploadFile(fileId, file, receiver, progressCallback);
     }
 
+    public void uploadFile(String fileId, File file, String receiver, String sender,
+                           Consumer<Integer> progressCallback) {
+        fileTransferClient.uploadFile(fileId, file, receiver, sender, progressCallback);
+    }
+
+
     // Download file
     public void downloadFile(String fileId, String sender, String fileName,
                              long fileSize, String savePath, Consumer<Integer> progressCallback) {
@@ -376,10 +382,34 @@ public class ChatClient {
             handleFileRejected(message);
         } else if (message.startsWith(Protocol.SVR_FILE_DOWNLOAD)) {
             handleFileDownload(message);
+        } else if (message.startsWith(Protocol.SVR_GROUP_FILE_REQUEST)) {
+            handleGroupFileRequest(message);
+        } else if (message.startsWith(Protocol.SVR_GROUP_FILE_ACCEPT)) {
+            handleGroupFileAccepted(message);
+        } else if (message.startsWith(Protocol.SVR_FILE_DOWNLOAD_REQUEST)) {
+            handleDownloadFileRequest(message);
+        } else if (message.startsWith(Protocol.SVR_FILE_DOWNLOAD_ACCEPT)) {
+            handleDownloadFileAccepted(message);
         }
     }
 
     private void handleLoginSuccess() {
+        // Tạo thư mục Downloads trong thư mục của người dùng
+        defaultDownloadFolder = System.getProperty("user.home") + File.separator + "ChatApp"
+                + File.separator + currentUser.getUsername() + File.separator + "Downloads";
+        File downloadDir = new File(defaultDownloadFolder);
+        if (!downloadDir.exists()) {
+            downloadDir.mkdirs();
+        }
+
+        // Tạo thư mục Uploads trong thư mục của người dùng
+        defaultUploadFolder = System.getProperty("user.home") + File.separator + "ChatApp"
+                + File.separator + currentUser.getUsername() + File.separator + "Uploads";
+        File uploadDir = new File(defaultUploadFolder);
+        if (!uploadDir.exists()) {
+            uploadDir.mkdirs();
+        }
+
         SwingUtilities.invokeLater(() -> {
             JOptionPane.showMessageDialog(null, "Đăng nhập thành công!");
             showChatFrame();
@@ -436,27 +466,34 @@ public class ChatClient {
     private void handlePrivateMessage(String message) {
         // Format: /privatemsg sender|message hoặc /privatemsg receiver|message
         String content = message.substring(Protocol.SVR_PRIVATE_MSG.length());
-        String[] parts = content.split("\\|", 3);
+        String[] parts = content.split("\\|", 4);
 
-        if (parts.length >= 2) {
+        if (parts.length >= 3) {
             String contactName = parts[0];  // sender hoặc receiver
             String messageContent = parts[1];
-            boolean isSent = parts.length >= 3 && parts[2].equals("SENT");
+            long timestamp = Long.parseLong(parts[2]);
+            boolean isSent = parts.length >= 4 && parts[3].equals("SENT");
 
             // Xác định người gửi tin nhắn
             String sender;
             String chatContext;
+            String receiver;
 
             if (isSent) {
                 sender = currentUser.getUsername();
-                chatContext = contactName;
+                receiver = contactName;
             } else {
                 sender = contactName;
-                chatContext = contactName;
+                receiver = currentUser.getUsername();
+            }
+            chatContext = contactName;
+
+            if (localStorage != null) {
+                localStorage.saveTextMessage(sender, receiver, messageContent, false, timestamp);
             }
 
             if (chatFrame != null) {
-                chatFrame.displayMessage(chatContext, sender, messageContent);
+                chatFrame.displayMessage(chatContext, sender, messageContent, timestamp);
             }
         }
     }
@@ -721,12 +758,13 @@ public class ChatClient {
 
     private void handleGroupMessage(String message) {
         String content = message.substring(Protocol.SVR_GROUP_MSG.length());
-        String[] parts = content.split("\\|", 3);
+        String[] parts = content.split("\\|", 4);
 
-        if (parts.length == 3) {
+        if (parts.length == 4) {
             String groupName = parts[0];
             String sender = parts[1];
             String messageContent = parts[2];
+            long timestamp = Long.parseLong(parts[3]);
 
             // Hiển thị tin nhắn
             if (chatFrame != null) {
@@ -739,17 +777,17 @@ public class ChatClient {
     private void handleFileRequest(String message) {
         // Format: /filerequest fileId|sender|fileName|fileSize
         String content = message.substring(Protocol.SVR_FILE_REQUEST.length());
-        String[] parts = content.split("\\|", 4);
+        String[] parts = content.split("\\|", 5);
 
-        if (parts.length == 4) {
+        if (parts.length == 5) {
             String fileId = parts[0];
             String sender = parts[1];
             String fileName = parts[2];
             long fileSize = Long.parseLong(parts[3]);
+            long timestamp = Long.parseLong(parts[4]);
 
             System.out.println("Received file request: fileId=" + fileId + ", sender=" + sender + ", filename=" + fileName);
 
-            // QUAN TRỌNG: Phần code này cần sửa
             if (sender.equals(currentUser.getUsername())) {
                 // Người gửi file - chỉ hiển thị MỘT thông báo
 //                if (chatFrame != null) {
@@ -853,6 +891,7 @@ public class ChatClient {
             String[] fileInfo = getFileToDownload(fileId);
             if (fileInfo != null) {
                 String savePath = fileInfo[3];
+                String actualFileName = fileInfo[1];
 
                 // Tự động bắt đầu download
                 downloadFile(fileId, sender, fileName, fileSize, savePath, progress -> {
@@ -865,6 +904,9 @@ public class ChatClient {
                                 chatFrame.updateFileStatus(fileId, "Đã tải xong");
                                 // Thông báo cho người dùng
                                 chatFrame.showNotification("Đã tải xong file " + fileName + " từ " + sender);
+                                sendMessage(Protocol.CMD_CHANGE_MESSAGE_ACTUAL_FILENAME_SAVE +
+                                        fileId + Protocol.PARAM_DELIMITER +
+                                        actualFileName);
                             }
                         }
                     });
@@ -872,6 +914,184 @@ public class ChatClient {
             } else {
                 System.out.println("ERROR: Download info not found for fileId: " + fileId);
             }
+        }
+    }
+
+    private void handleGroupFileAccepted(String message) {
+        String content = message.substring(Protocol.SVR_GROUP_FILE_ACCEPT.length());
+        String[] parts = content.split("\\|");
+
+        String fileId = parts[0];
+        System.out.println("File accepted: fileId=" + fileId + ", parts.length=" + parts.length);
+
+        // Liệt kê tất cả các file đang chờ upload để debug
+        System.out.println("Files waiting to upload:");
+        for (Map.Entry<String, File> entry : filesToUpload.entrySet()) {
+            System.out.println("  - " + entry.getKey() + ": " + entry.getValue().getName());
+        }
+
+        if (parts.length == 1) {
+            // Người gửi nhận được thông báo người nhận đã chấp nhận
+            File fileToSend = getFileToUpload(fileId);
+            if (fileToSend != null) {
+                System.out.println("Starting upload file: " + fileToSend.getName());
+
+                // Cập nhật trạng thái trước khi bắt đầu upload
+                if (chatFrame != null) {
+                    SwingUtilities.invokeLater(() -> {
+                        chatFrame.updateFileStatus(fileId, "Đang gửi file...");
+                    });
+                }
+
+                // Thực hiện upload
+                uploadFile(fileId, fileToSend, "receiver", getCurrentUser().getUsername(), progress -> {
+                    if (chatFrame != null) {
+                        if (progress < 100) {
+                            SwingUtilities.invokeLater(() -> {
+                                chatFrame.updateFileStatus(fileId, "Đang gửi: " + progress + "%");
+                                chatFrame.updateUploadProgressBar(fileId, progress);
+                            });
+                        } else {
+                            SwingUtilities.invokeLater(() -> {
+                                chatFrame.updateFileStatus(fileId, "Đã gửi thành công");
+                                chatFrame.updateUploadProgressBar(fileId, 100);
+                            });
+                        }
+                    }
+                });
+            } else {
+                System.out.println("ERROR: File to upload not found for fileId: " + fileId);
+            }
+        }
+        else if (parts.length == 4) {
+            // Người nhận nhận được thông báo file đã sẵn sàng để tải
+            String sender = parts[1];
+            String fileName = parts[2];
+            long fileSize = Long.parseLong(parts[3]);
+
+            System.out.println("File ready to download from " + sender + ": " + fileName);
+
+            // Lấy đường dẫn đã lưu trước đó
+            String[] fileInfo = getFileToDownload(fileId);
+            if (fileInfo != null) {
+                String savePath = fileInfo[3];
+                String actualFileName = fileInfo[1];
+
+                // Tự động bắt đầu download
+                downloadFile(fileId, sender, fileName, fileSize, savePath, progress -> {
+                    SwingUtilities.invokeLater(() -> {
+                        if (chatFrame != null) {
+                            if (progress < 100) {
+                                chatFrame.updateFileStatus(fileId, "Đang tải: " + progress + "%");
+                            } else {
+                                chatFrame.updateFileComponent(fileId, savePath);
+                                chatFrame.updateFileStatus(fileId, "Đã tải xong");
+                                // Thông báo cho người dùng
+                                chatFrame.showNotification("Đã tải xong file " + fileName + " từ " + sender);
+                                sendMessage(Protocol.CMD_CHANGE_MESSAGE_GROUP_ACTUAL_FILENAME_SAVE +
+                                        fileId + Protocol.PARAM_DELIMITER +
+                                        actualFileName + Protocol.PARAM_DELIMITER +
+                                        getCurrentUser().getUsername());
+                            }
+                        }
+                    });
+                });
+            } else {
+                System.out.println("ERROR: Download info not found for fileId: " + fileId);
+            }
+        }
+    }
+
+    private void handleDownloadFileRequest(String message) {
+        String content = message.substring(Protocol.SVR_FILE_DOWNLOAD_REQUEST.length());
+        String[] parts = content.split("\\|", 4);
+
+        if (parts.length == 4) {
+            String fileId = parts[0];
+            String sender = parts[1];
+            String fileName = parts[2];
+            long fileSize = Long.parseLong(parts[3]);
+
+            // Người nhận file
+            serverConnection.sendMessage(Protocol.CMD_FILE_DOWNLOAD_ACCEPT + fileId +
+                    Protocol.PARAM_DELIMITER + getCurrentUser().getUsername());
+
+            // Tạo đường dẫn file để lưu
+            String saveFilePath = defaultDownloadFolder + File.separator + fileName;
+
+            // Kiểm tra nếu file đã tồn tại, thêm số vào tên file
+            File saveFile = new File(saveFilePath);
+            int count = 1;
+            String baseFileName = fileName;
+            String extension = "";
+
+            // Tách tên file và phần mở rộng
+            int lastDotPos = fileName.lastIndexOf(".");
+            if (lastDotPos > 0) {
+                baseFileName = fileName.substring(0, lastDotPos);
+                extension = fileName.substring(lastDotPos);
+            }
+
+            // Nếu file đã tồn tại, tạo tên mới
+            while (saveFile.exists()) {
+                saveFilePath = defaultDownloadFolder + File.separator + baseFileName + "(" + count + ")" + extension;
+                saveFile = new File(saveFilePath);
+                count++;
+            }
+
+            // Thêm file vào danh sách chờ download
+            addFileToDownload(fileId, sender, fileName, fileSize, saveFilePath);
+
+            // Hiển thị thông báo nhận file
+            if (chatFrame != null) {
+                chatFrame.updateFileStatus(fileId, "Đang chờ nhận file từ " + sender);
+            }
+        } else {
+            System.out.println("ERROR: Invalid file download request format: " + message);
+        }
+    }
+
+    private void handleDownloadFileAccepted(String message) {
+        String content = message.substring(Protocol.SVR_FILE_DOWNLOAD_ACCEPT.length());
+        String[] parts = content.split("\\|", 4);
+
+        if (parts.length == 4) {
+            String fileId = parts[0];
+            String sender = parts[1];
+            String fileName = parts[2];
+
+            // Lấy thông tin file từ danh sách chờ download
+            String[] fileInfo = getFileToDownload(fileId);
+            if (fileInfo != null) {
+                String actualFileName = fileInfo[1];
+                long fileSize = Long.parseLong(fileInfo[2]);
+                String savePath = fileInfo[3];
+
+                // Tự động bắt đầu download
+                downloadFile(fileId, sender, fileName, fileSize, savePath, progress -> {
+                    SwingUtilities.invokeLater(() -> {
+                        if (chatFrame != null) {
+                            if (progress < 100) {
+                                chatFrame.updateFileStatus(fileId, "Đang tải: " + progress + "%");
+                            } else {
+                                chatFrame.updateFileComponent(fileId, savePath);
+                                chatFrame.updateFileStatus(fileId, "Đã tải xong");
+                                // Thông báo cho người dùng
+                                chatFrame.showNotification("Đã tải xong file " + fileName + " từ " + sender);
+
+                                sendMessage(Protocol.CMD_CHANGE_MESSAGE_GROUP_ACTUAL_FILENAME_SAVE +
+                                        fileId + Protocol.PARAM_DELIMITER +
+                                        actualFileName + Protocol.PARAM_DELIMITER +
+                                        getCurrentUser().getUsername());
+                            }
+                        }
+                    });
+                });
+            } else {
+                System.out.println("ERROR: Download info not found for fileId: " + fileId);
+            }
+        } else {
+            System.out.println("ERROR: Invalid file download accept format: " + message);
         }
     }
 
@@ -887,15 +1107,151 @@ public class ChatClient {
         }
     }
 
-    private void handleFileDownload(String message) {
-        String fileId = message.substring(Protocol.SVR_FILE_DOWNLOAD.length());
+    public void downloadFileFromServer(String fileId, String sender, String fileName, long fileSize) {
+        // Gửi yêu cầu tải file từ server storage
+        // Protocol: CMD_FILE_DOWNLOAD fileId
+        serverConnection.sendMessage(Protocol.CMD_FILE_DOWNLOAD + fileId +
+                Protocol.PARAM_DELIMITER + sender +
+                Protocol.PARAM_DELIMITER + getCurrentUser().getUsername() +
+                Protocol.PARAM_DELIMITER + fileName +
+                Protocol.PARAM_DELIMITER + fileSize);
+    }
 
-        System.out.println("File downloaded: fileId=" + fileId);
-        // Xóa file khỏi danh sách
-        filesToDownload.remove(fileId);
-        if (chatFrame != null) {
-            chatFrame.updateFileStatus(fileId, "Đã tải xong");
+    private void handleFileDownload(String message) {
+        try {
+            // Format: SVR_FILE_DOWNLOAD fileId|fileName|fileSize
+            String[] parts = message.substring(Protocol.SVR_FILE_DOWNLOAD.length()).split("\\|", 3);
+
+            if (parts.length >= 3) {
+                String fileId = parts[0];
+                String fileName = parts[1];
+                long fileSize = Long.parseLong(parts[2]);
+
+                Object[] downloadInfo = pendingDownloads.get(fileId);
+                if (downloadInfo != null) {
+                    String savePath = (String) downloadInfo[0];
+                    Consumer<Integer> progressCallback = (Consumer<Integer>) downloadInfo[1];
+
+                    // Tải file
+                    downloadFile(fileId, getCurrentUser().getUsername(), fileName, fileSize, savePath, progressCallback);
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Lỗi khi xử lý yêu cầu tải file: " + e.getMessage());
+            e.printStackTrace();
         }
+    }
+
+    private void handleGroupFileRequest(String message) {
+        // Format: /groupfilerequest groupName|fileName|fileSize|fileId
+        String content = message.substring(Protocol.SVR_GROUP_FILE_REQUEST.length());
+        String[] parts = content.split("\\|", 8);
+
+        if (parts.length >= 7) {
+            String groupName = parts[0];
+            String sender = parts[1];
+            String fileName = parts[2];
+            long fileSize = Long.parseLong(parts[3]);
+            String fileId = parts[4];
+            String receiver = parts[5]; // Người nhận file
+            long timestamp = Long.parseLong(parts[6]);
+
+            // Nếu người gửi là chính mình, không cần xử lý
+            if (sender.equals(currentUser.getUsername())) {
+                boolean hasOnlineReceiver = Boolean.parseBoolean(parts[7]);
+                if (!hasOnlineReceiver) {
+                    // Vẫn upload file lên server
+                    File fileToUpload = getFileToUpload(fileId);
+                    if (fileToUpload != null) {
+                        System.out.println("Starting upload file: " + fileToUpload.getName());
+
+                        // Cập nhật trạng thái trước khi bắt đầu upload
+                        if (chatFrame != null) {
+                            SwingUtilities.invokeLater(() -> {
+                                chatFrame.updateFileStatus(fileId, "Đang gửi file...");
+                            });
+                        }
+
+                        // Thực hiện upload
+                        uploadFile(fileId, fileToUpload, receiver, currentUser.getUsername(), progress -> {
+                            if (chatFrame != null) {
+                                if (progress < 100) {
+                                    SwingUtilities.invokeLater(() -> {
+                                        chatFrame.updateFileStatus(fileId, "Đang gửi: " + progress + "%");
+                                        chatFrame.updateUploadProgressBar(fileId, progress);
+                                    });
+                                } else {
+                                    SwingUtilities.invokeLater(() -> {
+                                        chatFrame.updateFileStatus(fileId, "Đã gửi thành công");
+                                        chatFrame.updateUploadProgressBar(fileId, 100);
+                                    });
+                                }
+                            }
+                        });
+                    } else {
+                        System.out.println("ERROR: File to upload not found for fileId: " + fileId);
+                    }
+                }
+            }
+            else {
+                // Người nhận file trong nhóm
+                serverConnection.sendMessage(Protocol.CMD_GROUP_FILE_ACCEPT + groupName +
+                        Protocol.PARAM_DELIMITER + fileId);
+
+                // Tạo đường dẫn lưu file
+                String saveFilePath = defaultDownloadFolder + File.separator + fileName;
+
+                // Kiểm tra nếu file đã tồn tại, thêm số vào tên file
+                File saveFile = new File(saveFilePath);
+                int count = 1;
+                String baseFileName = fileName;
+                String extension = "";
+
+                // Tách tên file và phần mở rộng
+                int lastDotPos = fileName.lastIndexOf(".");
+                if (lastDotPos > 0) {
+                    baseFileName = fileName.substring(0, lastDotPos);
+                    extension = fileName.substring(lastDotPos);
+                }
+
+                // Nếu file đã tồn tại, tạo tên mới
+                while (saveFile.exists()) {
+                    saveFilePath = defaultDownloadFolder + File.separator + baseFileName + "(" + count + ")" + extension;
+                    saveFile = new File(saveFilePath);
+                    count++;
+                }
+
+                // Thêm vào danh sách chờ download
+                addFileToDownload(fileId, sender, fileName, fileSize, saveFilePath);
+
+                // Hiển thị thông báo trong nhóm
+                if (chatFrame != null) {
+                    chatFrame.displayFileMessageInGroup(groupName, sender, fileName, fileSize, fileId,
+                            "Đang chờ nhận file...", saveFilePath, timestamp);
+                }
+            }
+        }
+    }
+
+    public String sendGroupFileRequest(String groupName, File file) {
+        String fileId = UUID.randomUUID().toString();
+        addFileToUpload(fileId, file);
+
+        // Gửi yêu cầu file đến tất cả thành viên trong nhóm
+        serverConnection.sendGroupFileRequest(groupName, file.getName(), file.length(), fileId);
+
+        // Hiển thị thông tin file trong chat
+        chatFrame.displayFileMessageInGroup(groupName, currentUser.getUsername(),
+                file.getName(), file.length(), fileId,
+                "Đang gửi cho nhóm...", null, System.currentTimeMillis());
+
+        // Lưu vào local storage
+        if (localStorage != null) {
+            localStorage.saveFileMessage(currentUser.getUsername(), groupName, file.getName(),
+                    file.length(), fileId, null, System.currentTimeMillis(), true);
+        }
+
+        return fileId;
     }
 
     private void handleError(String message) {
@@ -912,6 +1268,12 @@ public class ChatClient {
 
     public LocalStorage getLocalStorage() {
         return localStorage;
+    }
+
+    public void updateFileMessageComponentPath(String fileId, String filePath) {
+        if (chatFrame != null) {
+            chatFrame.updateFilePath(fileId, filePath);
+        }
     }
 
     public Group getGroup(String groupName) {

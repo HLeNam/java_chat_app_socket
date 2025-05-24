@@ -43,7 +43,7 @@ public class FileTransferPanel extends JPanel {
         add(downloadScrollPane);
     }
 
-    public void sendFile(String receiver) {
+    public void sendFile(String receiver, boolean isGroup) {
         JFileChooser fileChooser = new JFileChooser();
         fileChooser.setMultiSelectionEnabled(true);
         int result = fileChooser.showOpenDialog(this);
@@ -58,24 +58,15 @@ public class FileTransferPanel extends JPanel {
                     continue;
                 }
 
-//                String fileId = UUID.randomUUID().toString();
-
-                // Thêm progress bar cho upload
-//                JProgressBar progressBar = addUploadProgressBar(file.getName(), receiver);
-
                 // Gửi yêu cầu chuyển file đến server
-                String fileId =  client.sendFileRequest(receiver, file);
+                String fileId;
+                if (isGroup) {
+                    fileId = client.sendGroupFileRequest(receiver, file);
+                } else {
+                    fileId = client.sendFileRequest(receiver, file);
+                }
 
                 JProgressBar progressBar = addUploadProgressBar(file.getName(), receiver, fileId);
-
-                // Lưu file để upload khi nhận được chấp nhận từ server
-//                client.addFileToUpload(fileId, file);
-
-                // Hiển thị file trong khu vực chat
-//                client.displayFileMessage(receiver, client.getCurrentUser().getUsername(),
-//                        file.getName(), file.length(), fileId, "Đang chờ xác nhận...");
-//                client.displayFileMessage(receiver, client.getCurrentUser().getUsername(),
-//                        file.getName(), file.length(), fileId, "Đang gửi file...");
             }
         }
     }

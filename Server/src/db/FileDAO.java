@@ -7,26 +7,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class FileDAO {
-    public static void createTableIfNotExists() {
-        String sql = "CREATE TABLE IF NOT EXISTS files (" +
-                "id TEXT PRIMARY KEY, " +
-                "sender TEXT NOT NULL, " +
-                "receiver TEXT NOT NULL, " +
-                "file_name TEXT NOT NULL, " +
-                "file_size INTEGER NOT NULL, " +
-                "storage_path TEXT NOT NULL, " +
-                "timestamp INTEGER NOT NULL" +
-                ")";
-
-        try (Connection conn = DatabaseManager.getConnection();
-             Statement stmt = conn.createStatement()) {
-            stmt.execute(sql);
-        } catch (SQLException e) {
-            System.err.println("Lỗi khi tạo bảng files: " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-
     public static boolean saveFileInfo(FileInfo fileInfo) {
         String sql = "INSERT INTO files (id, sender, receiver, file_name, file_size, storage_path, timestamp) " +
                 "VALUES (?, ?, ?, ?, ?, ?, ?)";

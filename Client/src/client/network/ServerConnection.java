@@ -117,6 +117,13 @@ public class ServerConnection implements Runnable {
         sendMessage(Protocol.CMD_FILE_REJECT + fileId);
     }
 
+    public void sendGroupFileRequest(String groupName, String fileName, long fileSize, String fileId) {
+        // CMD_GROUP_FILE_SEND groupName|fileName|fileSize|fileId
+        String message = Protocol.CMD_GROUP_FILE_SEND + groupName + Protocol.PARAM_DELIMITER +
+                fileName + Protocol.PARAM_DELIMITER + fileSize + Protocol.PARAM_DELIMITER + fileId;
+        sendMessage(message);
+    }
+
     public void getOnlineUsers() {
         sendMessage(Protocol.CMD_ONLINE_USERS);
     }

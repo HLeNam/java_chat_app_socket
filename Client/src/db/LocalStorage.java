@@ -69,11 +69,138 @@ public class LocalStorage {
                 "timestamp INTEGER NOT NULL" +
                 ")";
 
+        //
+        String createMessageTable =  "CREATE TABLE IF NOT EXISTS messages (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                "sender TEXT, " +
+                "receiver TEXT, " +
+                "message TEXT, " +
+                "timestamp LONG, " +
+                "is_group INTEGER DEFAULT 0, " +
+                "message_type TEXT DEFAULT 'text', " +  // 'text' hoặc 'file'
+                "file_name TEXT, " +
+                "file_size LONG, " +
+                "file_id TEXT, " +
+                "file_path TEXT)";
+
         try (Statement stmt = conn.createStatement()) {
             stmt.execute(createChatHistoryTable);
             stmt.execute(createFilesSentTable);
             stmt.execute(createFilesReceivedTable);
+            stmt.execute(createMessageTable);
         }
+    }
+
+    public boolean saveTextMessage(String sender, String receiver, String content,
+                                   boolean isGroup, long timestamp) {
+        String sql = "INSERT INTO messages(sender, receiver, message, timestamp, " +
+                "is_group, message_type) " +
+                "VALUES(?, ?, ?, ?, ?, 'text')";
+
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, sender);
+            pstmt.setString(2, receiver);
+            pstmt.setString(3, content);
+            pstmt.setLong(4, timestamp);
+            pstmt.setInt(5, isGroup ? 1 : 0);
+
+            int rowsAffected = pstmt.executeUpdate();
+            return rowsAffected > 0;
+        } catch (SQLException e) {
+            System.err.println("Lỗi khi lưu tin nhắn văn bản: " + e.getMessage());
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    public boolean saveFileMessage(String sender, String receiver, String fileName,
+                                   long fileSize, String fileId, String filePath,
+                                   long timestamp, boolean isGroup) {
+        String sql = "INSERT INTO messages(sender, receiver, timestamp, is_group, " +
+                "message_type, file_name, file_size, file_id, file_path) " +
+                "VALUES(?, ?, ?, ?, 'file', ?, ?, ?, ?)";
+
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, sender);
+            pstmt.setString(2, receiver);
+            pstmt.setLong(3, timestamp);
+            pstmt.setInt(4, isGroup ? 1 : 0);
+            pstmt.setString(5, fileName);
+            pstmt.setLong(6, fileSize);
+            pstmt.setString(7, fileId);
+            pstmt.setString(8, filePath);
+
+            int rowsAffected = pstmt.executeUpdate();
+            return rowsAffected > 0;
+        } catch (SQLException e) {
+            System.err.println("Lỗi khi lưu tin nhắn file: " + e.getMessage());
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    public List<Object[]> getChatHistory(String chatPartner, boolean isGroup, int limit) {
+        List<Object[]> messages = new ArrayList<>();
+        String sql;
+
+        if (isGroup) {
+            sql = "SELECT sender, receiver, message, message_type, timestamp, " +
+                    "file_name, file_size, file_id, file_path " +
+                    "FROM messages WHERE receiver = ? AND is_group = 1 " +
+                    "ORDER BY timestamp ASC LIMIT ?";
+        } else {
+            sql = "SELECT sender, receiver, message, message_type, timestamp, " +
+                    "file_name, file_size, file_id, file_path " +
+                    "FROM messages WHERE " +
+                    "((sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?)) " +
+                    "AND is_group = 0 ORDER BY timestamp ASC LIMIT ?";
+        }
+
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            if (isGroup) {
+                pstmt.setString(1, chatPartner);
+                pstmt.setInt(2, limit);
+            } else {
+                pstmt.setString(1, username);
+                pstmt.setString(2, chatPartner);
+                pstmt.setString(3, chatPartner);
+                pstmt.setString(4, username);
+                pstmt.setInt(5, limit);
+            }
+
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    String messageType = rs.getString("message_type");
+                    Object[] messageData;
+
+                    if ("text".equals(messageType)) {
+                        messageData = new Object[5];
+                        messageData[0] = rs.getString("sender");
+                        messageData[1] = rs.getString("message");
+                        messageData[2] = rs.getLong("timestamp");
+                        messageData[3] = messageType;
+                        messageData[4] = rs.getString("receiver");
+                    } else { // file
+                        messageData = new Object[8];
+                        messageData[0] = rs.getString("sender");
+                        messageData[1] = rs.getString("file_id");
+                        messageData[2] = rs.getLong("timestamp");
+                        messageData[3] = messageType;
+                        messageData[4] = rs.getString("file_name");
+                        messageData[5] = rs.getLong("file_size");
+                        messageData[6] = rs.getString("file_path");
+                        messageData[7] = rs.getString("receiver");
+                    }
+
+                    messages.add(messageData);
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Lỗi khi lấy lịch sử chat: " + e.getMessage());
+            e.printStackTrace();
+        }
+
+        return messages;
     }
 
     public boolean saveFileSent(FileInfo fileInfo) {

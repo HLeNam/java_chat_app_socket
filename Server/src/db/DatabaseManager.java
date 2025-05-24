@@ -48,9 +48,24 @@ public class DatabaseManager {
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
                 "sender TEXT NOT NULL, " +
                 "receiver TEXT NOT NULL, " +
-                "content TEXT NOT NULL, " +
-                "type TEXT NOT NULL, " + // 'private', 'group', 'global'
-                "timestamp INTEGER NOT NULL" +
+                "content TEXT, " +
+                "type TEXT NOT NULL, " +    // 'private', 'group', 'global'
+                "message_type TEXT NOT NULL, " +    // 'text' hoặc 'file'
+                "is_group BOOLEAN NOT NULL, " +
+                "timestamp BIGINT NOT NULL, " +     // Dùng timestamp để sắp xếp
+                "file_id TEXT, " +
+                "file_name TEXT, " +
+                "file_size BIGINT," +
+                "actual_filename_save TEXT, " + // Tên file thực tế trên được lưu trên client
+                "actual_filename_upload TEXT " + // Tên file thực tế
+                ")";
+
+        String createMessageGroupActualFilenameTable = "CREATE TABLE IF NOT EXISTS message_group_actual_filename (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                "file_id TEXT NOT NULL, " +
+                "username TEXT NOT NULL, " +
+                "actual_filename_save TEXT, " +
+                "actual_filename_upload TEXT " +
                 ")";
 
         String createGroupsTable = "CREATE TABLE IF NOT EXISTS groups (" +
@@ -68,11 +83,31 @@ public class DatabaseManager {
                 "UNIQUE(group_name, username)" +
                 ")";
 
+        String createFilesTable = "CREATE TABLE IF NOT EXISTS files (" +
+                "id TEXT PRIMARY KEY, " +
+                "sender TEXT, " +
+                "receiver TEXT, " +
+                "file_name TEXT NOT NULL, " +
+                "file_size BIGINT NOT NULL, " +
+                "storage_path TEXT NOT NULL, " +
+                "timestamp BIGINT" +
+                ")";
+
+        String del1 = "DROP TABLE IF EXISTS message_group_actual_filename";
+        String del2 = "DROP TABLE IF EXISTS files";
+        String del5 = "DROP TABLE IF EXISTS messages";
+
         try (Statement stmt = conn.createStatement()) {
+            // Xóa các bảng cũ nếu cần thiết
+//            stmt.execute(del1);
+//            stmt.execute(del2);
+//            stmt.execute(del5);
             stmt.execute(createUsersTable);
             stmt.execute(createMessagesTable);
             stmt.execute(createGroupsTable);
             stmt.execute(createGroupMembersTable);
+            stmt.execute(createMessageGroupActualFilenameTable);
+            stmt.execute(createFilesTable);
             System.out.println("Các bảng cơ bản đã được tạo (nếu chưa tồn tại)");
         }
     }
