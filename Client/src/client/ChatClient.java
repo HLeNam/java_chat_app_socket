@@ -43,8 +43,6 @@ public class ChatClient {
     public static String defaultDownloadFolder;
     public static String defaultUploadFolder;
 
-    private Map<String, Object[]> pendingDownloads = new HashMap<>();
-
     public ChatClient() {
         this("localhost", 9999, 9998);
     }
@@ -198,13 +196,6 @@ public class ChatClient {
         SwingUtilities.invokeLater(() -> {
             loginFrame = new LoginFrame(this);
             loginFrame.setVisible(true);
-        });
-    }
-
-    public void showRegisterFrame() {
-        SwingUtilities.invokeLater(() -> {
-            registerFrame = new LoginFrame(this);
-            registerFrame.setVisible(true);
         });
     }
 
@@ -380,8 +371,6 @@ public class ChatClient {
             handleFileAccepted(message);
         } else if (message.startsWith(Protocol.SVR_FILE_REJECT)) {
             handleFileRejected(message);
-        } else if (message.startsWith(Protocol.SVR_FILE_DOWNLOAD)) {
-            handleFileDownload(message);
         } else if (message.startsWith(Protocol.SVR_GROUP_FILE_REQUEST)) {
             handleGroupFileRequest(message);
         } else if (message.startsWith(Protocol.SVR_GROUP_FILE_ACCEPT)) {
@@ -556,46 +545,7 @@ public class ChatClient {
             }
         }
     }
-//
-//    private void handleNewGroup(String message) {
-//        // Format: /newgroup groupName|creator
-//        String content = message.substring(Protocol.SVR_NEW_GROUP.length());
-//        String[] parts = content.split("\\|", 2);
-//
-//        if (parts.length == 2) {
-//            String groupName = parts[0];
-//            String creator = parts[1];
-//
-//            // Kiểm tra nếu không phải là nhóm của mình
-//            if (!creator.equals(currentUser.getUsername())) {
-//                // Thông báo có nhóm mới tạo
-//                if (chatFrame != null) {
-//                    chatFrame.notifyNewGroup(groupName, creator);
-//                }
-//            }
-//        }
-//    }
 
-    //    private void handleCreateGroupSuccess(String message) {
-//        String content = message.substring(Protocol.SVR_CREATE_GROUP_SUCCESS.length());
-//        String[] parts = content.split("\\|", 2);
-//
-//        if (parts.length == 2) {
-//            String groupName = parts[0];
-//            String targetUser = parts[1];
-//
-//            Group group = groups.get(groupName);
-//            if (group != null) {
-//                group.addMember(targetUser);
-//
-//                if (chatFrame != null) {
-//                    chatFrame.updateGroupMembers(group);
-//                    chatFrame.displayGroupSystemMessage(groupName,
-//                            targetUser + " đã được thêm vào nhóm bởi " + currentUser.getUsername());
-//                }
-//            }
-//        }
-//    }
     private void handleCreateGroupSuccess(String message) {
         String groupName = message.substring(Protocol.SVR_CREATE_GROUP_SUCCESS.length());
 
@@ -1115,31 +1065,6 @@ public class ChatClient {
                 Protocol.PARAM_DELIMITER + getCurrentUser().getUsername() +
                 Protocol.PARAM_DELIMITER + fileName +
                 Protocol.PARAM_DELIMITER + fileSize);
-    }
-
-    private void handleFileDownload(String message) {
-        try {
-            // Format: SVR_FILE_DOWNLOAD fileId|fileName|fileSize
-            String[] parts = message.substring(Protocol.SVR_FILE_DOWNLOAD.length()).split("\\|", 3);
-
-            if (parts.length >= 3) {
-                String fileId = parts[0];
-                String fileName = parts[1];
-                long fileSize = Long.parseLong(parts[2]);
-
-                Object[] downloadInfo = pendingDownloads.get(fileId);
-                if (downloadInfo != null) {
-                    String savePath = (String) downloadInfo[0];
-                    Consumer<Integer> progressCallback = (Consumer<Integer>) downloadInfo[1];
-
-                    // Tải file
-                    downloadFile(fileId, getCurrentUser().getUsername(), fileName, fileSize, savePath, progressCallback);
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("Lỗi khi xử lý yêu cầu tải file: " + e.getMessage());
-            e.printStackTrace();
-        }
     }
 
     private void handleGroupFileRequest(String message) {

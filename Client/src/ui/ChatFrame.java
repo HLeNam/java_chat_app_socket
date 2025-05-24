@@ -791,27 +791,6 @@ public class ChatFrame extends JFrame {
         fileTransferPanel.sendFile(receiver, isGroup);
     }
 
-    public void handleFileRequest(String fileId, String sender, String fileName, long fileSize) {
-        // Chuyển qua tab file
-        sidePanel.setSelectedIndex(2);
-
-        // Hiển thị yêu cầu file bằng FileTransferPanel
-        fileTransferPanel.handleFileRequest(fileId, sender, fileName, fileSize);
-    }
-
-    // Xử lý khi file sẵn sàng để tải về
-//    public void handleFileReady(String fileId, String sender, String fileName, long fileSize) {
-//        // Chuyển qua tab file
-//        sidePanel.setSelectedIndex(2);
-//
-//        // Hiển thị file sẵn sàng để tải về
-//        fileTransferPanel.handleFileReady(fileId);
-//
-//        // Hiển thị trong khu vực chat
-//        createOrShowPrivateChat(sender);
-//        displayFileMessage(sender, sender, fileName, fileSize, fileId, "Đã sẵn sàng để tải về");
-//    }
-
     public void displayMessage(String chatContext, String sender, String message, long timestamp) {
         SwingUtilities.invokeLater(() -> {
             JTextPane chatArea;
@@ -942,77 +921,6 @@ public class ChatFrame extends JFrame {
             String tabTitle = groupName + " (G)";
             if (!tabTitle.equals(getCurrentTabName())) {
                 highlightTab(tabTitle);
-            }
-        });
-    }
-
-    public void displayFileMessage(String chatContext, String sender, String fileName,
-                                   long fileSize, String fileId, String status, String filePath,
-                                   long timestamp) {
-        SwingUtilities.invokeLater(() -> {
-            JTextPane chatArea = getOrCreateChatArea(chatContext);
-
-            boolean found = false;
-            StyledDocument doc = chatArea.getStyledDocument();
-
-            // Tìm kiếm file component đã tồn tại
-            for (int i = 0; i < doc.getLength(); i++) {
-                Element elem = doc.getCharacterElement(i);
-                AttributeSet attrs = elem.getAttributes();
-
-                if (StyleConstants.getComponent(attrs) instanceof FileMessageComponent) {
-                    FileMessageComponent comp = (FileMessageComponent) StyleConstants.getComponent(attrs);
-
-                    if (comp.getFileId() != null && comp.getFileId().equals(fileId)) {
-                        comp.updateStatus(status);
-                        comp.setFilePath(filePath);
-                        found = true;
-                        break;
-                    }
-                }
-            }
-
-            // Nếu chưa có, tạo file component mới
-            if (!found) {
-                FileMessageComponent fileComponent = new FileMessageComponent(
-                        fileName, fileSize, fileId, sender, status, filePath, client);
-
-                try {
-                    Style style = chatArea.addStyle("FileStyle", null);
-                    StyleConstants.setComponent(style, fileComponent);
-
-                    // Format timestamp
-                    SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss");
-                    String timeString = "[" + sdf.format(new Date(timestamp)) + "] ";
-
-                    Style timeStyle = chatArea.addStyle("TimeStyle", null);
-                    StyleConstants.setForeground(timeStyle, Color.GRAY);
-                    StyleConstants.setFontSize(timeStyle, 10);
-
-                    Style senderStyle = chatArea.addStyle("SenderStyle", null);
-                    if (sender.equals(client.getCurrentUser().getUsername())) {
-                        StyleConstants.setForeground(senderStyle, new Color(0, 128, 0));
-                    } else {
-                        StyleConstants.setForeground(senderStyle, Color.BLUE);
-                    }
-                    StyleConstants.setBold(senderStyle, true);
-
-                    doc.insertString(doc.getLength(), timeString, timeStyle);
-                    doc.insertString(doc.getLength(), sender + ": \n", senderStyle);
-
-                    // Thêm component file
-                    doc.insertString(doc.getLength(), " ", style);
-                    doc.insertString(doc.getLength(), "\n\n", null);
-
-                    chatArea.setCaretPosition(doc.getLength());
-                } catch (BadLocationException e) {
-                    e.printStackTrace();
-                }
-            }
-
-            if (!sender.equals(client.getCurrentUser().getUsername()) &&
-                    !chatContext.equals(getCurrentTabName())) {
-                highlightTab(chatContext);
             }
         });
     }
@@ -1261,39 +1169,6 @@ public class ChatFrame extends JFrame {
             }
         });
     }
-
-//    public void ensureFileMessageExists(String chatContext, String sender, String fileName,
-//                                        long fileSize, String fileId, String status) {
-//        SwingUtilities.invokeLater(() -> {
-//            JTextPane chatArea = getOrCreateChatArea(chatContext);
-//            boolean found = false;
-//
-//            Component[] components = chatArea.getComponents();
-//            for (Component comp : components) {
-//                if (comp instanceof FileMessageComponent &&
-//                        ((FileMessageComponent) comp).getFileId().equals(fileId)) {
-//                    found = true;
-//                    ((FileMessageComponent) comp).updateStatus(status);
-//                    break;
-//                }
-//            }
-//
-//            if (!found) {
-//                // Nếu không tìm thấy, tạo mới component
-//                displayFileMessage(chatContext, sender, fileName, fileSize, fileId, status);
-//            }
-//        });
-//    }
-
-    // Cập nhật tiến trình upload file
-    public void updateFileUploadProgress(String fileId, int progress) {
-        if (progress >= 100) {
-            updateFileStatus(fileId, "Đã gửi thành công");
-        } else {
-            updateFileStatus(fileId, "Đang gửi... " + progress + "%");
-        }
-    }
-
 
     private void sendMessage() {
         String message = messageInput.getText().trim();
