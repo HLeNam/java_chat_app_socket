@@ -1,0 +1,1192 @@
+package server;
+
+import db.FileDAO;
+import db.GroupDAO;
+import db.MessageDAO;
+import db.UserDAO;
+import model.MessageInfo;
+import service.FileService;
+import util.Protocol;
+
+import java.io.*;
+import java.net.Socket;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
+
+public class ClientHandler implements Runnable {
+    private Socket clientSocket;
+    private BufferedReader in;
+    private PrintWriter out;
+    private String id;
+    private String username;
+    private boolean authenticated = false;
+
+    public ClientHandler(Socket clientSocket) {
+        this.clientSocket = clientSocket;
+        this.id = UUID.randomUUID().toString();
+
+        try {
+            in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+            out = new PrintWriter(clientSocket.getOutputStream(), true);
+        } catch (IOException e) {
+            System.err.println("Lỗi khi tạo ClientHandler: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public void run() {
+        try {
+            String message;
+            while ((message = in.readLine()) != null) {
+                System.out.println("Nhận tin nhắn từ client: " + message);
+                processMessage(message);
+            }
+        } catch (IOException e) {
+            System.err.println("Lỗi khi đọc tin nhắn từ client: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private void processMessage(String message) {
+        if (message.startsWith(Protocol.CMD_LOGIN)) {
+            handleLogin(message);
+        } else if (message.startsWith(Protocol.CMD_REGISTER)) {
+            handleRegister(message);
+        } else if (!authenticated) {
+            out.println(Protocol.SVR_ERROR + "Bạn chưa đăng nhập.");
+            return;
+        } else if (message.startsWith(Protocol.CMD_EXIT)) {
+            handleExit();
+        } else if (message.startsWith(Protocol.CMD_PRIVATE_MSG)) {
+            handlePrivateMessage(message);
+        } else if (message.startsWith(Protocol.CMD_GROUP_MSG)) {
+            handleGroupMessage(message);
+        } else if (message.startsWith(Protocol.CMD_ONLINE_USERS)) {
+            handleGetOnlineUsers();
+        } else if (message.startsWith(Protocol.CMD_GET_CHAT_HISTORY)) {
+            handleGetChatHistory(message);
+        }
+        else if (message.startsWith(Protocol.CMD_LOAD_MORE_MESSAGES)) {
+            handleLoadMoreMessages(message);
+        } else if (message.startsWith(Protocol.CMD_CREATE_GROUP)) {
+            handleCreateGroup(message);
+        } else if (message.startsWith(Protocol.CMD_ADD_TO_GROUP)) {
+            handleAddToGroup(message);
+        } else if (message.startsWith(Protocol.CMD_GET_GROUPS)) {
+            handleGetGroups();
+        } else if (message.startsWith(Protocol.CMD_LEAVE_GROUP)) {
+            handleLeaveGroup(message);
+        } else if (message.startsWith(Protocol.CMD_REMOVE_FROM_GROUP)) {
+            handleRemoveFromGroup(message);
+        } else if (message.startsWith(Protocol.CMD_FILE_SEND)) {
+            handleFileSendRequest(message);
+        } else if (message.startsWith(Protocol.CMD_FILE_ACCEPT)) {
+            handleFileAccept(message);
+        } else if (message.startsWith(Protocol.CMD_FILE_REJECT)) {
+            handleFileReject(message);
+        } else if (message.startsWith(Protocol.CMD_GROUP_FILE_SEND)) {
+            handleGroupFileSend(message);
+        } else if (message.startsWith(Protocol.CMD_CHANGE_MESSAGE_ACTUAL_FILENAME_SAVE)) {
+            handleChangeMessageActualFilenameSave(message);
+        } else if (message.startsWith(Protocol.CMD_CHANGE_MESSAGE_ACTUAL_FILENAME_UPLOAD)) {
+            handleChangeMessageActualFilenameUpload(message);
+        } else if (message.startsWith(Protocol.CMD_GROUP_FILE_ACCEPT)) {
+            handleGroupFileAccept(message);
+        }  else if (message.startsWith(Protocol.CMD_CHANGE_MESSAGE_GROUP_ACTUAL_FILENAME_SAVE)) {
+            handleChangeMessageGroupActualFilenameSave(message);
+        } else if (message.startsWith(Protocol.CMD_CHANGE_MESSAGE_GROUP_ACTUAL_FILENAME_UPLOAD)) {
+            handleChangeMessageGroupActualFilenameUpload(message);
+        } else if (message.startsWith(Protocol.CMD_FILE_DOWNLOAD)) {
+            handleFileDownloadRequest(message);
+        } else if (message.startsWith(Protocol.CMD_FILE_DOWNLOAD_ACCEPT)) {
+            handleFileDownloadAccept(message);
+        } else if (message.startsWith(Protocol.CMD_DELETE_MESSAGE)) {
+            handleDeleteMessage(message);
+        }
+        else if (message.startsWith(Protocol.CMD_VOICE_CALL_REQUEST)) {
+            handleVoiceCallRequest(message);
+        } else if (message.startsWith(Protocol.CMD_VOICE_CALL_ACCEPT)) {
+            handleVoiceCallAccept(message);
+        } else if (message.startsWith(Protocol.CMD_VOICE_CALL_REJECT)) {
+            handleVoiceCallReject(message);
+        } else if (message.startsWith(Protocol.CMD_VOICE_CALL_END)) {
+            handleVoiceCallEnd(message);
+        }
+        else if (message.startsWith(Protocol.CMD_VIDEO_CALL_REQUEST)) {
+            String receiver = message.substring(Protocol.CMD_VIDEO_CALL_REQUEST.length());
+            handleVideoCallRequest(receiver);
+        } else if (message.startsWith(Protocol.CMD_VIDEO_CALL_ACCEPT)) {
+            String caller = message.substring(Protocol.CMD_VIDEO_CALL_ACCEPT.length());
+            handleVideoCallAccept(caller);
+        } else if (message.startsWith(Protocol.CMD_VIDEO_CALL_REJECT)) {
+            String caller = message.substring(Protocol.CMD_VIDEO_CALL_REJECT.length());
+            handleVideoCallReject(caller);
+        } else if (message.startsWith(Protocol.CMD_VIDEO_CALL_END)) {
+            String participant = message.substring(Protocol.CMD_VIDEO_CALL_END.length());
+            handleVideoCallEnd(participant);
+        } else if (message.startsWith(Protocol.CMD_TOGGLE_VIDEO)) {
+            String participant = message.substring(Protocol.CMD_TOGGLE_VIDEO.length());
+            handleVideoToggle(participant);
+        }
+    }
+
+    private void handleLogin(String message) {
+        String[] parts = message.substring(Protocol.CMD_LOGIN.length()).split("\\|");
+        if (parts.length != 2) {
+            out.println(Protocol.SVR_LOGIN_FAIL + "Định dạng đăng nhập không hợp lệ.");
+            return;
+        }
+
+        String username = parts[0];
+        String password = parts[1];
+
+        if (UserDAO.validateLogin(username, password)) {
+            if (ChatServer.isUserOnline(username)) {
+                out.println(Protocol.SVR_LOGIN_FAIL + "Tài khoản đang được sử dụng ở nơi khác.");
+                return;
+            }
+
+            this.username = username;
+            this.authenticated = true;
+            ChatServer.addOnlineUser(username, id);
+
+            out.println(Protocol.SVR_LOGIN_SUCCESS);
+
+            String joinMessage = Protocol.SVR_USER_JOINED + username;
+            ChatServer.broadcastToAllClients(joinMessage);
+        } else if (!UserDAO.usernameExists(username)) {
+            out.println(Protocol.SVR_LOGIN_FAIL + "Tài khoản không tồn tại.");
+        } else {
+            out.println(Protocol.SVR_LOGIN_FAIL + "Tên đăng nhập hoặc mật khẩu không đúng.");
+        }
+    }
+
+    private void handleRegister(String message) {
+        String[] parts = message.substring(Protocol.CMD_REGISTER.length()).split("\\|");
+        if (parts.length < 2) {
+            out.println(Protocol.SVR_REGISTER_FAIL + "Định dạng đăng ký không hợp lệ.");
+            return;
+        }
+
+        String username = parts[0];
+        String password = parts[1];
+        String fullName = (parts.length > 2) ? parts[2] : "";
+        String email = (parts.length > 3) ? parts[3] : "";
+
+        // Kiểm tra xem tên đăng nhập đã tồn tại chưa
+        if (UserDAO.usernameExists(username)) {
+            out.println(Protocol.SVR_REGISTER_FAIL + "Tên đăng nhập đã tồn tại.");
+            return;
+        }
+
+        // Thực hiện đăng ký
+        if (UserDAO.registerUser(username, password, fullName, email)) {
+            out.println(Protocol.SVR_REGISTER_SUCCESS);
+        } else {
+            out.println(Protocol.SVR_REGISTER_FAIL + "Đăng ký thất bại. Vui lòng thử lại sau.");
+        }
+    }
+
+    private void handlePrivateMessage(String message) {
+        String content = message.substring(Protocol.CMD_PRIVATE_MSG.length());
+        String[] parts = content.split("\\|", 2);
+
+        if (parts.length != 2) {
+            out.println(Protocol.SVR_ERROR + "Định dạng tin nhắn riêng không hợp lệ.");
+            return;
+        }
+
+        String receiver = parts[0];
+        String messageContent = parts[1];
+        String sender = username;
+
+        System.out.println("Người nhận: " + receiver);
+        System.out.println("Người gửi: " + sender);
+        System.out.println("Nội dung tin nhắn: " + messageContent);
+
+        if (!UserDAO.usernameExists(receiver)) {
+            out.println(Protocol.SVR_ERROR + "Người nhận không tồn tại.");
+            return;
+        }
+
+        long timestamp = System.currentTimeMillis();
+        long messageId = MessageDAO.saveTextMessage(sender, receiver, messageContent, "private", false, timestamp);
+
+        String privateMessage = Protocol.SVR_PRIVATE_MSG + sender + Protocol.PARAM_DELIMITER + messageContent +
+                Protocol.PARAM_DELIMITER + timestamp + Protocol.PARAM_DELIMITER + messageId;
+
+        ClientHandler receiverHandler = ChatServer.getClientHandler(receiver);
+        if (receiverHandler != null) {
+            receiverHandler.sendMessage(privateMessage);
+        }
+
+        out.println(Protocol.SVR_PRIVATE_MSG + receiver + Protocol.PARAM_DELIMITER + messageContent +
+                Protocol.PARAM_DELIMITER + timestamp +
+                Protocol.PARAM_DELIMITER + messageId +
+                Protocol.PARAM_DELIMITER + "SENT");
+    }
+
+    private void handleGroupMessage(String message) {
+        String content = message.substring(Protocol.CMD_GROUP_MSG.length());
+        String[] parts = content.split("\\|", 2);
+
+        if (parts.length != 2) {
+            out.println(Protocol.SVR_ERROR + "Định dạng tin nhắn nhóm không hợp lệ.");
+            return;
+        }
+
+        String groupName = parts[0].trim();
+        String messageContent = parts[1];
+        String sender = username;
+
+        if (!GroupDAO.groupExists(groupName)) {
+            out.println(Protocol.SVR_ERROR + "Nhóm không tồn tại");
+            return;
+        }
+
+        if (!GroupDAO.isGroupMember(groupName, username)) {
+            out.println(Protocol.SVR_ERROR + "Bạn không phải là thành viên của nhóm này");
+            return;
+        }
+
+        long timestamp = System.currentTimeMillis();
+        long messageId = MessageDAO.saveTextMessage(sender, groupName, messageContent, "group", true, timestamp);
+
+        List<String> members = GroupDAO.getGroupMembers(groupName);
+
+        for (String member : members) {
+            ClientHandler memberHandler = ChatServer.getClientHandler(member);
+            if (memberHandler != null) {
+                memberHandler.sendMessage(Protocol.SVR_GROUP_MSG +
+                        groupName + Protocol.PARAM_DELIMITER +
+                        sender + Protocol.PARAM_DELIMITER +
+                        messageContent + Protocol.PARAM_DELIMITER +
+                        timestamp + Protocol.PARAM_DELIMITER +
+                        messageId);
+            }
+        }
+    }
+
+    private void handleGetChatHistory(String message) {
+        String content = message.substring(Protocol.CMD_GET_CHAT_HISTORY.length());
+        String[] parts = content.split("\\|", 3);
+
+        if (parts.length < 2) {
+            out.println(Protocol.SVR_ERROR + "Định dạng lệnh không hợp lệ");
+            return;
+        }
+
+        String chatPartner = parts[0].trim();
+        String chatType = parts[1].trim(); // "private", "group", "global"
+        int limit = parts.length > 2 ? Integer.parseInt(parts[2]) : 20; // Mặc định 20 tin nhắn
+
+        boolean isGroup = chatType.equals("group");
+
+        List<Object[]> chatHistory = MessageDAO.getChatHistory(
+                isGroup ? chatPartner : username,
+                isGroup ? username : chatPartner,
+                isGroup,
+                limit
+        );
+
+        // Gửi kết quả về client
+        out.println(Protocol.SVR_CHAT_HISTORY_START);
+
+        for (Object[] messageData : chatHistory) {
+            long id = (long) messageData[0];
+            String sender = (String) messageData[1];
+            String receiver = (String) messageData[2];
+            String messageType = (String) messageData[4];
+            long timestamp = (Long) messageData[5];
+
+            if ("text".equals(messageType)) {
+                String msgContent = (String) messageData[3];
+                out.println(Protocol.SVR_CHAT_HISTORY_ITEM +
+                        sender + Protocol.PARAM_DELIMITER +
+                        msgContent + Protocol.PARAM_DELIMITER +
+                        timestamp + Protocol.PARAM_DELIMITER +
+                        messageType + Protocol.PARAM_DELIMITER +
+                        id + Protocol.PARAM_DELIMITER +
+                        isGroup);
+            } else if ("file".equals(messageType)) {
+                String fileId = (String) messageData[6];
+                String fileName = (String) messageData[7];
+                long fileSize = (Long) messageData[8];
+                String actualFileNameSave = (String) messageData[9];
+                String actualFileNameUpload = (String) messageData[10];
+
+                out.println(Protocol.SVR_CHAT_HISTORY_ITEM +
+                        sender + Protocol.PARAM_DELIMITER +
+                        fileId + Protocol.PARAM_DELIMITER +
+                        fileName + Protocol.PARAM_DELIMITER +
+                        fileSize + Protocol.PARAM_DELIMITER +
+                        timestamp + Protocol.PARAM_DELIMITER +
+                        actualFileNameSave + Protocol.PARAM_DELIMITER +
+                        actualFileNameUpload + Protocol.PARAM_DELIMITER +
+                        messageType + Protocol.PARAM_DELIMITER +
+                        id + Protocol.PARAM_DELIMITER +
+                        isGroup);
+            }
+        }
+
+        out.println(Protocol.SVR_CHAT_HISTORY_END);
+    }
+
+    private void handleLoadMoreMessages(String message) {
+        String content = message.substring(Protocol.CMD_LOAD_MORE_MESSAGES.length());
+        String[] parts = content.split("\\|", 4);
+
+        if (parts.length < 3) {
+            out.println(Protocol.SVR_ERROR + "Định dạng lệnh tải thêm tin nhắn không hợp lệ");
+            return;
+        }
+
+        String chatPartner = parts[0].trim();
+        String chatType = parts[1].trim();
+        long olderThan = Long.parseLong(parts[2].trim());
+        int limit = parts.length > 3 ? Integer.parseInt(parts[3].trim()) : 10; // Mặc định 10 tin nhắn
+
+        List<Map<String, Object>> messages = null;
+
+        boolean isGroup = chatType.equals("group");
+
+        List<Object[]> chatHistory = MessageDAO.getOlderMessages(
+                isGroup ? chatPartner : username,
+                isGroup ? username : chatPartner,
+                isGroup,
+                olderThan,
+                limit
+        );
+
+        // Gửi kết quả về client
+        out.println(Protocol.SVR_LOAD_MORE_START);
+
+        for (Object[] messageData : chatHistory) {
+            long id = (long) messageData[0];
+            String sender = (String) messageData[1];
+            String receiver = (String) messageData[2];
+            String messageType = (String) messageData[4];
+            long timestamp = (Long) messageData[5];
+
+            if ("text".equals(messageType)) {
+                String msgContent = (String) messageData[3];
+                out.println(Protocol.SVR_LOAD_MORE_ITEM +
+                        sender + Protocol.PARAM_DELIMITER +
+                        msgContent + Protocol.PARAM_DELIMITER +
+                        timestamp + Protocol.PARAM_DELIMITER +
+                        messageType + Protocol.PARAM_DELIMITER +
+                        id + Protocol.PARAM_DELIMITER +
+                        isGroup);
+            } else if ("file".equals(messageType)) {
+                String fileId = (String) messageData[6];
+                String fileName = (String) messageData[7];
+                long fileSize = (Long) messageData[8];
+                String actualFileNameSave = (String) messageData[9];
+                String actualFileNameUpload = (String) messageData[10];
+
+                out.println(Protocol.SVR_LOAD_MORE_ITEM +
+                        sender + Protocol.PARAM_DELIMITER +
+                        fileId + Protocol.PARAM_DELIMITER +
+                        fileName + Protocol.PARAM_DELIMITER +
+                        fileSize + Protocol.PARAM_DELIMITER +
+                        timestamp + Protocol.PARAM_DELIMITER +
+                        actualFileNameSave + Protocol.PARAM_DELIMITER +
+                        actualFileNameUpload + Protocol.PARAM_DELIMITER +
+                        messageType + Protocol.PARAM_DELIMITER +
+                        id + Protocol.PARAM_DELIMITER +
+                        isGroup);
+            }
+        }
+
+        out.println(Protocol.SVR_LOAD_MORE_END);
+    }
+
+    private void handleGetOnlineUsers() {
+        List<String> users = ChatServer.getOnlineUsers();
+        StringBuilder sb = new StringBuilder(Protocol.SVR_ONLINE_USERS);
+
+        for (String user : users) {
+            sb.append(user).append(",");
+        }
+
+        if (sb.length() > Protocol.SVR_ONLINE_USERS.length()) {
+            sb.deleteCharAt(sb.length() - 1);
+        }
+
+        out.println(sb.toString());
+    }
+
+    private void handleCreateGroup(String message) {
+        String groupName = message.substring(Protocol.CMD_CREATE_GROUP.length()).trim();
+
+        if (groupName.isEmpty()) {
+            out.println(Protocol.SVR_ERROR + "Tên nhóm không được để trống");
+            return;
+        }
+
+        if (GroupDAO.groupExists(groupName)) {
+            out.println(Protocol.SVR_ERROR + "Nhóm này đã tồn tại");
+            return;
+        }
+
+        boolean success = GroupDAO.createGroup(groupName, username);
+
+        if (success) {
+            out.println(Protocol.SVR_CREATE_GROUP_SUCCESS + groupName);
+
+            ChatServer.broadcastMessage(Protocol.SVR_NEW_GROUP + groupName +
+                    Protocol.PARAM_DELIMITER + username);
+        } else {
+            out.println(Protocol.SVR_ERROR + "Không thể tạo nhóm");
+        }
+    }
+
+    private void handleAddToGroup(String message) {
+        String content = message.substring(Protocol.CMD_ADD_TO_GROUP.length());
+        String[] parts = content.split("\\|", 2);
+
+        if (parts.length != 2) {
+            out.println(Protocol.SVR_ERROR + "Định dạng lệnh không hợp lệ");
+            return;
+        }
+
+        String groupName = parts[0].trim();
+        String targetUser = parts[1].trim();
+
+        if (!GroupDAO.groupExists(groupName)) {
+            out.println(Protocol.SVR_ERROR + "Nhóm không tồn tại");
+            return;
+        }
+
+        if (!GroupDAO.isGroupMember(groupName, username)) {
+            out.println(Protocol.SVR_ERROR + "Bạn không phải là thành viên của nhóm này");
+            return;
+        }
+
+        if (!UserDAO.usernameExists(targetUser)) {
+            out.println(Protocol.SVR_ERROR + "Người dùng không tồn tại");
+            return;
+        }
+
+        if (GroupDAO.isGroupMember(groupName, targetUser)) {
+            out.println(Protocol.SVR_ERROR + targetUser + " đã là thành viên của nhóm");
+            return;
+        }
+
+        boolean success = GroupDAO.addMemberToGroup(groupName, targetUser);
+
+        if (success) {
+            out.println(Protocol.SVR_ADD_TO_GROUP_SUCCESS + groupName +
+                    Protocol.PARAM_DELIMITER + targetUser);
+
+            List<String> members = GroupDAO.getGroupMembers(groupName);
+            for (String member : members) {
+                ClientHandler memberHandler = ChatServer.getClientHandler(member);
+                if (memberHandler != null && !member.equals(username)) {
+                    memberHandler.sendMessage(Protocol.SVR_GROUP_USER_ADDED +
+                            groupName + Protocol.PARAM_DELIMITER +
+                            targetUser + Protocol.PARAM_DELIMITER +
+                            username);
+                }
+            }
+
+            ClientHandler targetHandler = ChatServer.getClientHandler(targetUser);
+            if (targetHandler != null) {
+                targetHandler.sendMessage(Protocol.SVR_ADDED_TO_GROUP +
+                        groupName + Protocol.PARAM_DELIMITER +
+                        username);
+            }
+        } else {
+            out.println(Protocol.SVR_ERROR + "Không thể thêm người dùng vào nhóm");
+        }
+    }
+
+    private void handleLeaveGroup(String message) {
+        String groupName = message.substring(Protocol.CMD_LEAVE_GROUP.length()).trim();
+
+        // Kiểm tra xem nhóm có tồn tại không
+        if (!GroupDAO.groupExists(groupName)) {
+            out.println(Protocol.SVR_ERROR + "Nhóm không tồn tại");
+            return;
+        }
+
+        // Kiểm tra xem người dùng có phải là thành viên của nhóm không
+        if (!GroupDAO.isGroupMember(groupName, username)) {
+            out.println(Protocol.SVR_ERROR + "Bạn không phải là thành viên của nhóm này");
+            return;
+        }
+
+        // Xóa người dùng khỏi nhóm
+        boolean success = GroupDAO.removeMemberFromGroup(groupName, username);
+
+        if (success) {
+            // Thông báo cho người rời nhóm
+            out.println(Protocol.SVR_LEFT_GROUP + groupName);
+
+            // Thông báo cho tất cả thành viên còn lại trong nhóm
+            List<String> members = GroupDAO.getGroupMembers(groupName);
+            for (String member : members) {
+                ClientHandler memberHandler = ChatServer.getClientHandler(member);
+                if (memberHandler != null) {
+                    memberHandler.sendMessage(Protocol.SVR_GROUP_USER_LEFT +
+                            groupName + Protocol.PARAM_DELIMITER +
+                            username);
+                }
+            }
+
+            if (members.isEmpty()) {
+                GroupDAO.deleteGroup(groupName);
+            }
+        } else {
+            out.println(Protocol.SVR_ERROR + "Không thể rời khỏi nhóm");
+        }
+    }
+
+    private void handleGetGroups() {
+        // Lấy danh sách nhóm mà người dùng tham gia
+        List<Map<String, Object>> userGroups = GroupDAO.getUserGroups(username);
+
+        if (userGroups.isEmpty()) {
+            out.println(Protocol.SVR_GROUP_LIST);
+            return;
+        }
+
+        StringBuilder groupList = new StringBuilder();
+
+        for (Map<String, Object> group : userGroups) {
+            String groupName = (String) group.get("name");
+            String creator = (String) group.get("creator");
+
+            // Lấy danh sách thành viên
+            List<String> members = GroupDAO.getGroupMembers(groupName);
+
+            groupList.append(groupName).append(":")
+                    .append(creator).append(":");
+
+            // Thêm danh sách thành viên
+            for (int i = 0; i < members.size(); i++) {
+                groupList.append(members.get(i));
+                if (i < members.size() - 1) {
+                    groupList.append(",");
+                }
+            }
+
+            groupList.append("|");
+        }
+
+        // Xóa dấu | cuối cùng nếu có
+        if (!groupList.isEmpty() && groupList.charAt(groupList.length() - 1) == '|') {
+            groupList.deleteCharAt(groupList.length() - 1);
+        }
+
+        out.println(Protocol.SVR_GROUP_LIST + groupList.toString());
+    }
+
+    private void handleRemoveFromGroup(String message) {
+        String content = message.substring(Protocol.CMD_REMOVE_FROM_GROUP.length());
+        String[] parts = content.split("\\|", 2);
+
+        if (parts.length != 2) {
+            out.println(Protocol.SVR_ERROR + "Định dạng lệnh không hợp lệ");
+            return;
+        }
+
+        String groupName = parts[0].trim();
+        String targetUser = parts[1].trim();
+
+        // Kiểm tra xem nhóm có tồn tại không
+        if (!GroupDAO.groupExists(groupName)) {
+            out.println(Protocol.SVR_ERROR + "Nhóm không tồn tại");
+            return;
+        }
+
+        // Lấy thông tin nhóm
+        Map<String, Object> groupInfo = GroupDAO.getGroupInfo(groupName);
+        if (groupInfo == null) {
+            out.println(Protocol.SVR_ERROR + "Không thể lấy thông tin nhóm");
+            return;
+        }
+
+        // Kiểm tra xem người dùng có phải là người tạo nhóm không
+        String creator = (String) groupInfo.get("creator");
+        if (!username.equals(creator)) {
+            out.println(Protocol.SVR_ERROR + "Bạn không có quyền xóa thành viên khỏi nhóm");
+            return;
+        }
+
+        // Kiểm tra xem người bị xóa có phải là thành viên của nhóm không
+        if (!GroupDAO.isGroupMember(groupName, targetUser)) {
+            out.println(Protocol.SVR_ERROR + targetUser + " không phải là thành viên của nhóm");
+            return;
+        }
+
+        // Xóa người dùng khỏi nhóm
+        boolean success = GroupDAO.removeMemberFromGroup(groupName, targetUser);
+
+        if (success) {
+            // Thông báo cho người xóa
+            out.println(Protocol.SVR_REMOVE_FROM_GROUP_SUCCESS +
+                    groupName + Protocol.PARAM_DELIMITER + targetUser);
+
+            // Thông báo cho người bị xóa
+            ClientHandler targetHandler = ChatServer.getClientHandler(targetUser);
+            if (targetHandler != null) {
+                targetHandler.sendMessage(Protocol.SVR_REMOVED_FROM_GROUP +
+                        groupName + Protocol.PARAM_DELIMITER + username);
+            }
+
+            // Thông báo cho tất cả thành viên còn lại trong nhóm
+            List<String> members = GroupDAO.getGroupMembers(groupName);
+            for (String member : members) {
+                ClientHandler memberHandler = ChatServer.getClientHandler(member);
+                if (memberHandler != null && !member.equals(username)) {
+                    memberHandler.sendMessage(Protocol.SVR_GROUP_USER_LEFT +
+                            groupName + Protocol.PARAM_DELIMITER +
+                            targetUser + Protocol.PARAM_DELIMITER +
+                            "removed");
+                }
+            }
+        } else {
+            out.println(Protocol.SVR_ERROR + "Không thể xóa người dùng khỏi nhóm");
+        }
+    }
+
+    private void handleFileSendRequest(String message) {
+        String content = message.substring(Protocol.CMD_FILE_SEND.length());
+        String[] parts = content.split("\\|", 4);
+
+        if (parts.length != 4) {
+            out.println(Protocol.SVR_ERROR + "Định dạng yêu cầu file không hợp lệ.");
+            return;
+        }
+
+        String receiver = parts[0].trim();
+        String fileName = parts[1];
+        long fileSize;
+
+        try {
+            fileSize = Long.parseLong(parts[2]);
+        } catch (NumberFormatException e) {
+            out.println(Protocol.SVR_ERROR + "Kích thước file không hợp lệ.");
+            return;
+        }
+
+        String fileId = parts[3].trim();
+        String sender = username;
+
+        if (!UserDAO.usernameExists(receiver)) {
+            out.println(Protocol.SVR_ERROR + "Người dùng không tồn tại.");
+            return;
+        }
+
+        long timestamp = System.currentTimeMillis();
+        MessageDAO.saveFileMessage(sender, receiver, fileId, fileName, fileSize, "private", false, timestamp);
+
+        String _fileId = FileService.createFileTransferRequest(sender, receiver, fileName, fileSize, fileId);
+        if (_fileId == null) {
+            out.println(Protocol.SVR_ERROR + "Không thể tạo yêu cầu chuyển file.");
+            return;
+        }
+
+        ClientHandler receiverHandler = ChatServer.getClientHandler(receiver);
+        boolean isReceiverOnline = receiverHandler != null;
+        if (receiverHandler != null) {
+            // Thông báo cho người nhận file
+            receiverHandler.sendMessage(Protocol.SVR_FILE_REQUEST + fileId +
+                    Protocol.PARAM_DELIMITER + sender +
+                    Protocol.PARAM_DELIMITER + fileName +
+                    Protocol.PARAM_DELIMITER + fileSize +
+                    Protocol.PARAM_DELIMITER + timestamp);
+        }
+
+        // Thông báo cho người gửi biết đã gửi yêu cầu
+        out.println(Protocol.SVR_FILE_REQUEST + fileId +
+                Protocol.PARAM_DELIMITER + receiver +
+                Protocol.PARAM_DELIMITER + fileName +
+                Protocol.PARAM_DELIMITER + fileSize +
+                Protocol.PARAM_DELIMITER + timestamp +
+                Protocol.PARAM_DELIMITER + receiver +
+                Protocol.PARAM_DELIMITER + isReceiverOnline);
+    }
+
+    private void handleGroupFileSend(String message) {
+        String content = message.substring(Protocol.CMD_GROUP_FILE_SEND.length());
+        String[] parts = content.split("\\|", 4);
+
+        if (parts.length != 4) {
+            out.println(Protocol.SVR_ERROR + "Định dạng yêu cầu file không hợp lệ.");
+            return;
+        }
+
+        String groupName = parts[0].trim();
+        String fileName = parts[1];
+        long fileSize;
+        try {
+            fileSize = Long.parseLong(parts[2]);
+        } catch (NumberFormatException e) {
+            out.println(Protocol.SVR_ERROR + "Kích thước file không hợp lệ.");
+            return;
+        }
+        String fileId = parts[3].trim();
+        String sender = username;
+
+        if (!GroupDAO.groupExists(groupName)) {
+            out.println(Protocol.SVR_ERROR + "Nhóm không tồn tại.");
+            return;
+        }
+
+        if (!GroupDAO.isGroupMember(groupName, sender)) {
+            out.println(Protocol.SVR_ERROR + "Bạn không phải là thành viên của nhóm này.");
+            return;
+        }
+
+        long timestamp = System.currentTimeMillis();
+        MessageDAO.saveFileMessage(sender, groupName, fileId, fileName, fileSize, "group", true, timestamp);
+
+        for (String member : GroupDAO.getGroupMembers(groupName)) {
+            MessageDAO.saveMessageGroupActualFilename(fileId, member);
+        }
+
+        String _fileId = FileService.createFileTransferRequest(sender, groupName, fileName, fileSize, fileId);
+        if (_fileId == null) {
+            out.println(Protocol.SVR_ERROR + "Không thể tạo yêu cầu chuyển file.");
+            return;
+        }
+
+        List<String> members = GroupDAO.getGroupMembers(groupName);
+        boolean hasMemberOnline = false;
+        for (String member : members) {
+            ClientHandler memberHandler = ChatServer.getClientHandler(member);
+            if (memberHandler != null && !member.equals(sender)) {
+                // Thông báo cho tất cả thành viên trong nhóm
+                hasMemberOnline = true;
+                memberHandler.sendMessage(Protocol.SVR_GROUP_FILE_REQUEST + groupName +
+                        Protocol.PARAM_DELIMITER + sender +
+                        Protocol.PARAM_DELIMITER + fileName +
+                        Protocol.PARAM_DELIMITER + fileSize +
+                        Protocol.PARAM_DELIMITER + fileId +
+                        Protocol.PARAM_DELIMITER + memberHandler.username +
+                        Protocol.PARAM_DELIMITER + timestamp);
+            }
+        }
+
+        // Thông báo cho người gửi biết đã gửi yêu cầu
+        out.println(Protocol.SVR_GROUP_FILE_REQUEST + groupName +
+                Protocol.PARAM_DELIMITER + sender +
+                Protocol.PARAM_DELIMITER + fileName +
+                Protocol.PARAM_DELIMITER + fileSize +
+                Protocol.PARAM_DELIMITER + fileId +
+                Protocol.PARAM_DELIMITER + sender +
+                Protocol.PARAM_DELIMITER + timestamp +
+                Protocol.PARAM_DELIMITER + hasMemberOnline);
+    }
+
+    private void handleGroupFileAccept(String message) {
+        String content = message.substring(Protocol.CMD_GROUP_FILE_ACCEPT.length());
+        String[] parts = content.split("\\|", 2);
+
+        if (parts.length != 2) {
+            out.println(Protocol.SVR_ERROR + "Định dạng lệnh không hợp lệ");
+            return;
+        }
+
+        String groupName = parts[0].trim();
+        String fileId = parts[1].trim();
+
+        if (!GroupDAO.groupExists(groupName)) {
+            out.println(Protocol.SVR_ERROR + "Nhóm không tồn tại");
+            return;
+        }
+
+        if (!GroupDAO.isGroupMember(groupName, username)) {
+            out.println(Protocol.SVR_ERROR + "Bạn không phải là thành viên của nhóm này");
+            return;
+        }
+
+        System.out.println("Người dùng " + username + " đã chấp nhận file trong nhóm: " + groupName + ", fileId: " + fileId);
+
+        FileService.acceptFileTransfer(fileId, username, groupName);
+    }
+
+    private void handleFileAccept(String message) {
+        String fileId = message.substring(Protocol.CMD_FILE_ACCEPT.length()).trim();
+
+        System.out.println("Client accepts file: fileId=" + fileId + ", username=" + username);
+
+        FileService.acceptFileTransfer(fileId, username, null);
+    }
+
+    private void handleFileReject(String message) {
+        String fileId = message.substring(Protocol.CMD_FILE_REJECT.length()).trim();
+
+        // Xử lý từ chối file
+        FileService.rejectFileTransfer(fileId, username);
+    }
+
+    private void handleChangeMessageActualFilenameSave(String message) {
+        String content = message.substring(Protocol.CMD_CHANGE_MESSAGE_ACTUAL_FILENAME_SAVE.length());
+        String[] parts = content.split("\\|", 2);
+
+        if (parts.length != 2) {
+            out.println(Protocol.SVR_ERROR + "Định dạng lệnh không hợp lệ");
+            return;
+        }
+
+        String fileId = parts[0].trim();
+        String actualFileName = parts[1].trim();
+
+        MessageDAO.updateActualFilenameSave(actualFileName, fileId);
+    }
+
+    private void handleChangeMessageGroupActualFilenameSave(String message) {
+        String content = message.substring(Protocol.CMD_CHANGE_MESSAGE_GROUP_ACTUAL_FILENAME_SAVE.length());
+        String[] parts = content.split("\\|", 3);
+
+        if (parts.length != 3) {
+            out.println(Protocol.SVR_ERROR + "Định dạng lệnh không hợp lệ");
+            return;
+        }
+
+        String fileId = parts[0].trim();
+        String actualFileName = parts[1].trim();
+        String username = parts[2].trim();
+
+        MessageDAO.updateActualFilenameSaveInMessageGroupFileName(actualFileName, fileId, username);
+    }
+
+    private void handleChangeMessageActualFilenameUpload(String message) {
+        String content = message.substring(Protocol.CMD_CHANGE_MESSAGE_ACTUAL_FILENAME_UPLOAD.length());
+        String[] parts = content.split("\\|", 2);
+
+        if (parts.length != 2) {
+            out.println(Protocol.SVR_ERROR + "Định dạng lệnh không hợp lệ");
+            return;
+        }
+
+        String fileId = parts[0].trim();
+        String actualFileName = parts[1].trim();
+
+        MessageDAO.updateActualFilenameUpload(actualFileName, fileId);
+    }
+
+    private void handleChangeMessageGroupActualFilenameUpload(String message) {
+        String content = message.substring(Protocol.CMD_CHANGE_MESSAGE_GROUP_ACTUAL_FILENAME_UPLOAD.length());
+        String[] parts = content.split("\\|", 3);
+
+        if (parts.length != 3) {
+            out.println(Protocol.SVR_ERROR + "Định dạng lệnh không hợp lệ");
+            return;
+        }
+
+        String fileId = parts[0].trim();
+        String actualFileName = parts[1].trim();
+        String username = parts[2].trim();
+
+        MessageDAO.updateActualFilenameUploadInMessageGroupFileName(actualFileName, fileId, username);
+    }
+
+    private void handleFileDownloadRequest(String message) {
+        String content = message.substring(Protocol.CMD_FILE_DOWNLOAD.length());
+        String[] parts = content.split("\\|", 5);
+
+        if (parts.length != 5) {
+            out.println(Protocol.SVR_ERROR + "Định dạng yêu cầu tải file không hợp lệ.");
+            return;
+        }
+
+        String fileId = parts[0].trim();
+        String sender = parts[1].trim();
+        String receiver = parts[2].trim();
+        String fileName = parts[3].trim();
+        long fileSize;
+        try {
+            fileSize = Long.parseLong(parts[4].trim());
+        } catch (NumberFormatException e) {
+            out.println(Protocol.SVR_ERROR + "Kích thước file không hợp lệ.");
+            return;
+        }
+
+        if (!UserDAO.usernameExists(receiver)) {
+            out.println(Protocol.SVR_ERROR + "Người dùng không tồn tại.");
+            return;
+        }
+
+        MessageDAO.saveMessageGroupActualFilename(fileId, receiver);
+
+        String _fileId = FileService.createFileTransferRequest(sender, receiver, fileName, fileSize, fileId);
+        if (_fileId == null) {
+            out.println(Protocol.SVR_ERROR + "Không thể tạo yêu cầu chuyển file.");
+            return;
+        }
+
+        ClientHandler receiverHandler = ChatServer.getClientHandler(receiver);
+        if (receiverHandler != null) {
+            // Thông báo cho người nhận file
+            receiverHandler.sendMessage(Protocol.SVR_FILE_DOWNLOAD_REQUEST + fileId +
+                    Protocol.PARAM_DELIMITER + sender +
+                    Protocol.PARAM_DELIMITER + fileName +
+                    Protocol.PARAM_DELIMITER + fileSize);
+        } else {
+            out.println(Protocol.SVR_ERROR + "Người nhận không online.");
+        }
+    }
+
+    private void handleFileDownloadAccept(String message) {
+        String content = message.substring(Protocol.CMD_FILE_DOWNLOAD_ACCEPT.length());
+        String[] parts = content.split("\\|", 2);
+
+        if (parts.length != 2) {
+            out.println(Protocol.SVR_ERROR + "Định dạng lệnh không hợp lệ");
+            return;
+        }
+
+        String fileId = parts[0].trim();
+        String receiver = parts[1].trim();
+
+        if (!UserDAO.usernameExists(receiver)) {
+            out.println(Protocol.SVR_ERROR + "Người dùng không tồn tại");
+            return;
+        }
+
+        ClientHandler receiverHandler = ChatServer.getClientHandler(receiver);
+        FileService.FileTransferInfo transferInfo = FileService.getFileTransferInfo(fileId);
+        if (receiverHandler != null) {
+            receiverHandler.sendMessage(Protocol.SVR_FILE_DOWNLOAD_ACCEPT + transferInfo.getFileId() +
+                    Protocol.PARAM_DELIMITER + transferInfo.getSender() +
+                    Protocol.PARAM_DELIMITER + transferInfo.getFileName() +
+                    Protocol.PARAM_DELIMITER + transferInfo.getFileSize());
+        }
+    }
+
+    private void handleDeleteMessage(String message) {
+        String[] parts = message.substring(Protocol.CMD_DELETE_MESSAGE.length()).split("\\|", 2);
+
+        if (parts.length != 2) {
+            sendError("Định dạng lệnh xóa tin nhắn không hợp lệ");
+            return;
+        }
+
+        String messageId = parts[0];
+        String chatType = parts[1]; // "private" hoặc "group"
+        boolean isGroup = "group".equals(chatType);
+
+        // Kiểm tra tin nhắn tồn tại và người dùng hiện tại là người gửi
+        MessageInfo messageInfo = MessageDAO.getMessageById(messageId);
+
+        if (messageInfo == null) {
+            sendError("Không tìm thấy tin nhắn");
+            return;
+        }
+
+        if (!username.equals(messageInfo.getSender())) {
+            sendError("Bạn không có quyền xóa tin nhắn này");
+            return;
+        }
+
+        String messageType = messageInfo.getMessageType();
+
+        String receiver = messageInfo.getReceiver();
+        String fileId = messageInfo.getFileId();
+
+        String actualFileNameUpload = MessageDAO.getActualFilenameUpload(fileId, username, isGroup);;
+        String actualFileNameSave =  MessageDAO.getActualFilenameSave(fileId, receiver, isGroup);;
+
+        // Xóa tin nhắn từ database
+        boolean success = MessageDAO.deleteMessage(messageId);
+
+        if (success) {
+
+            if (messageType.equals("file")) {
+                // Xóa file liên quan nếu có
+                FileDAO.deleteFileInStorage(fileId);
+                FileDAO.deleteFileInfoById(fileId);
+                if (isGroup) {
+                    MessageDAO.deleteActualFilename(fileId);
+                }
+            }
+
+            // Thông báo cho người gửi và người nhận về việc tin nhắn đã xóa
+            String response = Protocol.SVR_MESSAGE_DELETED + messageId +
+                    Protocol.PARAM_DELIMITER + messageInfo.getSender() +
+                    Protocol.PARAM_DELIMITER + messageInfo.getReceiver() +
+                    Protocol.PARAM_DELIMITER + isGroup +
+                    Protocol.PARAM_DELIMITER + messageType +
+                    Protocol.PARAM_DELIMITER + actualFileNameSave +
+                    Protocol.PARAM_DELIMITER + actualFileNameUpload;
+
+            sendMessage(response);
+
+            if (isGroup) {
+                // Gửi thông báo đến tất cả thành viên trong nhóm
+                List<String> groupMembers = GroupDAO.getGroupMembers(messageInfo.getReceiver());
+                for (String member : groupMembers) {
+                    if (!member.equals(username)) {
+                        ClientHandler memberHandler = ChatServer.getClientHandler(member);
+                        if (memberHandler != null) {
+                            memberHandler.sendMessage(response);
+                        }
+                    }
+                }
+            } else {
+                // Gửi thông báo đến người nhận tin nhắn riêng
+                ClientHandler receiverHandler = ChatServer.getClientHandler(messageInfo.getReceiver());
+                if (receiverHandler != null) {
+                    receiverHandler.sendMessage(response);
+                }
+            }
+        } else {
+            sendError("Không thể xóa tin nhắn");
+        }
+    }
+
+    private void handleVoiceCallRequest(String message) {
+        String receiver = message.substring(Protocol.CMD_VOICE_CALL_REQUEST.length()).trim();
+
+        ClientHandler receiverHandler = ChatServer.getClientHandler(receiver);
+        if (receiverHandler != null) {
+            receiverHandler.sendMessage(Protocol.SVR_VOICE_CALL_REQUEST + username);
+        } else {
+            // Người dùng không online
+            out.println(Protocol.SVR_ERROR + "Người dùng không trực tuyến.");
+        }
+    }
+
+    private void handleVoiceCallAccept(String message) {
+        String caller = message.substring(Protocol.CMD_VOICE_CALL_ACCEPT.length());
+
+        // Gửi thông báo cho người gọi
+        ClientHandler callerHandler = ChatServer.getClientHandler(caller);
+        if (callerHandler != null) {
+            callerHandler.sendMessage(Protocol.SVR_VOICE_CALL_ACCEPT + username);
+
+            // Thiết lập kênh âm thanh giữa 2 người
+            ChatServer.setupAudioCall(caller, username);
+        }
+    }
+
+    private void handleVoiceCallReject(String message) {
+        String caller = message.substring(Protocol.CMD_VOICE_CALL_REJECT.length());
+
+        ClientHandler callerHandler = ChatServer.getClientHandler(caller);
+        if (callerHandler != null) {
+            callerHandler.sendMessage(Protocol.SVR_VOICE_CALL_REJECT + username);
+        }
+    }
+
+    private void handleVoiceCallEnd(String message) {
+        String participant = message.substring(Protocol.CMD_VOICE_CALL_END.length());
+
+        // Gửi thông báo kết thúc cuộc gọi
+        ClientHandler participantHandler = ChatServer.getClientHandler(participant);
+        if (participantHandler != null) {
+            participantHandler.sendMessage(Protocol.SVR_VOICE_CALL_END + username);
+        }
+
+        // Kết thúc kênh âm thanh
+        ChatServer.endAudioCall(username, participant);
+    }
+
+    private void handleVideoCallRequest(String receiver) {
+        ClientHandler receiverHandler = ChatServer.getClientHandler(receiver);
+
+        if (receiverHandler != null) {
+            receiverHandler.sendMessage(Protocol.SVR_VIDEO_CALL_REQUEST + username);
+            System.out.println("Người dùng " + username + " đang gọi video cho " + receiver);
+        } else {
+            sendMessage(Protocol.SVR_ERROR + "Người dùng " + receiver + " không trực tuyến");
+        }
+    }
+
+    private void handleVideoCallAccept(String caller) {
+        ClientHandler callerHandler = ChatServer.getClientHandler(caller);
+
+        if (callerHandler != null) {
+            callerHandler.sendMessage(Protocol.SVR_VIDEO_CALL_ACCEPT + username);
+
+            // Thiết lập kênh âm thanh và video
+            ChatServer.setupAudioCall(caller, username);
+            ChatServer.setupVideoCall(caller, username);
+
+            System.out.println(username + " đã chấp nhận cuộc gọi video từ " + caller);
+        }
+    }
+
+    private void handleVideoCallReject(String caller) {
+        ClientHandler callerHandler = ChatServer.getClientHandler(caller);
+
+        if (callerHandler != null) {
+            callerHandler.sendMessage(Protocol.SVR_VIDEO_CALL_REJECT + username);
+            System.out.println(username + " đã từ chối cuộc gọi video từ " + caller);
+        }
+    }
+
+    private void handleVideoCallEnd(String participant) {
+        ClientHandler participantHandler = ChatServer.getClientHandler(participant);
+
+        if (participantHandler != null) {
+            participantHandler.sendMessage(Protocol.SVR_VIDEO_CALL_END + username);
+            System.out.println(username + " đã kết thúc cuộc gọi video với " + participant);
+        }
+    }
+
+    private void handleVideoToggle(String participant) {
+        ClientHandler participantHandler = ChatServer.getClientHandler(participant);
+
+        if (participantHandler != null) {
+            participantHandler.sendMessage(Protocol.SVR_VIDEO_TOGGLED + username);
+            System.out.println(username + " đã chuyển đổi trạng thái video với " + participant);
+        }
+    }
+
+    private void sendError(String errorMessage) {
+        out.println(Protocol.SVR_ERROR + errorMessage);
+    }
+
+    private void handleExit() {
+        closeConnection();
+    }
+
+    public void sendMessage(String message) {
+        if (out != null) {
+            out.println(message);
+        }
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public void closeConnection() {
+        try {
+            if (authenticated && username != null) {
+                ChatServer.removeOnlineUser(username);
+
+                String leaveMessage = Protocol.SVR_USER_LEFT + username;
+                ChatServer.broadcastToAllClients(leaveMessage);
+            }
+
+            ChatServer instance = ChatServer.getInstance();
+            if (instance != null) {
+                instance.removeClientHandler(this.id);
+            }
+
+            if (in != null) {
+                in.close();
+            }
+            if (out != null) {
+                out.close();
+            }
+            if (clientSocket != null && !clientSocket.isClosed()) {
+                clientSocket.close();
+            }
+
+            System.out.println("Client đã ngắt kết nối: " + (username != null ? username : Objects.requireNonNull(clientSocket).getInetAddress()));
+        }  catch (IOException e) {
+            System.err.println("Lỗi khi đóng kết nối: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
